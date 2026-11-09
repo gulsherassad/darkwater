@@ -1,11 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"os"
 
 	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
+
+	"github.com/gulsherassad/darkwater/internal/ais"
 )
 
 const streamURL = "wss://stream.aisstream.io/v0/stream"
@@ -35,12 +38,25 @@ func main() {
 		log.Fatal("subscribe: ", err)
 	}
 
-	// Listen forever and print every message
+	// Listen forever: read, translate, print
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			log.Fatal("read: ", err)
 		}
-		log.Println(string(msg))
+
+		var env ais.Envelope
+		if err := json.Unmarshal(msg, &env); err != nil {
+			log.Println("bad json: ", err)
+			continue
+		}
+
+		pos, ok := env.ToPosition()
+		if !ok {
+			continue // not a position report, skip it
+		}
+
+		log.Printf("%-20s %9d  %.4f,%.4f  %4.1f kn  status=%d",
+			pos.Name, pos.MMSI, pos.Lat, pos.Lon, pos.SpeedKn, pos.NavStatus)
 	}
 }
