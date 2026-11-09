@@ -4,31 +4,30 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
 
 	"github.com/gulsherassad/darkwater/internal/ais"
+	"github.com/gulsherassad/darkwater/internal/tracker"
 )
 
 const streamURL = "wss://stream.aisstream.io/v0/stream"
 
 func main() {
-	// Load the API key from .env
 	godotenv.Load()
 	apiKey := os.Getenv("AISSTREAM_API_KEY")
 	if apiKey == "" {
 		log.Fatal("AISSTREAM_API_KEY not set")
 	}
 
-	// Dial: open the phone call
 	conn, _, err := websocket.DefaultDialer.Dial(streamURL, nil)
 	if err != nil {
 		log.Fatal("dial: ", err)
 	}
 	defer conn.Close()
 
-	// Say the password and what we want to hear (within 3 seconds)
 	sub := map[string]any{
 		"APIKey":             apiKey,
 		"BoundingBoxes":      [][][]float64{{{54.0, 7.0}, {58.5, 16.0}}}, // Denmark
@@ -38,7 +37,11 @@ func main() {
 		log.Fatal("subscribe: ", err)
 	}
 
-	// Listen forever: read, translate, print
+	store := tracker.New()
+	rejected := map[string]int{} // reason -> count
+	accepted := 0
+	lastReport := time.Now()
+
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
@@ -47,16 +50,30 @@ func main() {
 
 		var env ais.Envelope
 		if err := json.Unmarshal(msg, &env); err != nil {
-			log.Println("bad json: ", err)
+			rejected["bad_json"]++
 			continue
 		}
 
 		pos, ok := env.ToPosition()
 		if !ok {
-			continue // not a position report, skip it
+			continue
 		}
 
-		log.Printf("%-20s %9d  %.4f,%.4f  %4.1f kn  status=%d",
-			pos.Name, pos.MMSI, pos.Lat, pos.Lon, pos.SpeedKn, pos.NavStatus)
+		if reason := pos.Validate(); reason != "" {
+			rejected[reason]++
+			continue
+		}
+
+		if !store.Update(pos) {
+			rejected["stale"]++
+			continue
+		}
+		accepted++
+
+		// Summary every 10 seconds instead of printing every ship
+		if time.Since(lastReport) >= 10*time.Second {
+			log.Printf("ships=%d accepted=%d rejected=%v", store.Len(), accepted, rejected)
+			lastReport = time.Now()
+		}
 	}
 }

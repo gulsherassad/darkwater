@@ -58,14 +58,22 @@ func (e Envelope) ToPosition() (Position, bool) {
 	if heading == 511 {
 		heading = -1
 	}
+	speed := pr.Sog
+	if speed >= 102.2 { // 102.3 = speed unknown
+		speed = -1
+	}
+	course := pr.Cog
+	if course >= 360 { // 360 = course unknown
+		course = -1
+	}
 	return Position{
 		MMSI:      e.MetaData.MMSI,
 		Name:      strings.TrimSpace(e.MetaData.ShipName),
 		Time:      t,
 		Lat:       pr.Latitude,
 		Lon:       pr.Longitude,
-		SpeedKn:   pr.Sog,
-		CourseDeg: pr.Cog,
+		SpeedKn:   speed,
+		CourseDeg: course,
 		Heading:   heading,
 		NavStatus: pr.NavigationalStatus,
 	}, true
