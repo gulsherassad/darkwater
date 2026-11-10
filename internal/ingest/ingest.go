@@ -17,6 +17,7 @@ import (
 const (
 	streamURL   = "wss://stream.aisstream.io/v0/stream"
 	reportEvery = 10 * time.Second
+	readTimeout = 30 * time.Second // total silence this long = dead connection
 )
 
 // Denmark and the surrounding straits: [south-west corner, north-east corner] as [lat, lon]
@@ -94,6 +95,8 @@ func runOnce(ctx context.Context, cfg Config, store *tracker.Store, rec *recorde
 	lastReport := time.Now()
 
 	for {
+		// If nothing arrives for readTimeout, ReadMessage returns an error
+		conn.SetReadDeadline(time.Now().Add(readTimeout))
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			return err
