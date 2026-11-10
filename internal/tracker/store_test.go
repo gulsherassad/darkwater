@@ -32,6 +32,7 @@ func TestConcurrentUpdateAndSnapshot(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 1000; i++ {
 			_ = s.Snapshot()
+			_ = s.TakeChanges()
 		}
 	}()
 
@@ -52,5 +53,21 @@ func TestUpdateRejectsStale(t *testing.T) {
 	}
 	if _, ok := s.Update(ais.Position{MMSI: 211000000, Time: now}); ok {
 		t.Fatal("duplicate report should be rejected")
+	}
+}
+
+// TakeChanges returns each changed ship once, then starts empty.
+func TestTakeChanges(t *testing.T) {
+	s := New()
+	now := time.Now()
+	s.Update(ais.Position{MMSI: 211000000, Time: now})
+	s.Update(ais.Position{MMSI: 211000000, Time: now.Add(time.Second)}) // same ship again
+	s.Update(ais.Position{MMSI: 219000000, Time: now})
+
+	if got := len(s.TakeChanges()); got != 2 {
+		t.Fatalf("want 2 changed ships, got %d", got)
+	}
+	if got := len(s.TakeChanges()); got != 0 {
+		t.Fatalf("want 0 after taking, got %d", got)
 	}
 }

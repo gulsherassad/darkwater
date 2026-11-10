@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gulsherassad/darkwater/internal/ais"
 	"github.com/gulsherassad/darkwater/internal/tracker"
 )
 
@@ -22,32 +23,37 @@ type shipJSON struct {
 	NavStatus int       `json:"navStatus"`
 }
 
+func toShipJSON(ps []ais.Position) []shipJSON {
+	out := make([]shipJSON, len(ps))
+	for i, p := range ps {
+		out[i] = shipJSON{
+			MMSI:      p.MMSI,
+			Name:      p.Name,
+			Time:      p.Time,
+			Lat:       p.Lat,
+			Lon:       p.Lon,
+			SpeedKn:   p.SpeedKn,
+			CourseDeg: p.CourseDeg,
+			Heading:   p.Heading,
+			NavStatus: p.NavStatus,
+		}
+	}
+	return out
+}
+
 // NewRouter maps URLs to handler functions.
-func NewRouter(store *tracker.Store) http.Handler {
+func NewRouter(store *tracker.Store, hub *Hub) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/ships", func(w http.ResponseWriter, r *http.Request) {
-		snap := store.Snapshot()
-		out := make([]shipJSON, len(snap))
-		for i, p := range snap {
-			out[i] = shipJSON{
-				MMSI:      p.MMSI,
-				Name:      p.Name,
-				Time:      p.Time,
-				Lat:       p.Lat,
-				Lon:       p.Lon,
-				SpeedKn:   p.SpeedKn,
-				CourseDeg: p.CourseDeg,
-				Heading:   p.Heading,
-				NavStatus: p.NavStatus,
-			}
-		}
-		writeJSON(w, out)
+		writeJSON(w, toShipJSON(store.Snapshot()))
 	})
 
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"status": "ok", "ships": store.Len()})
 	})
+
+	mux.HandleFunc("GET /api/ws", hub.ServeWS(store))
 
 	return mux
 }

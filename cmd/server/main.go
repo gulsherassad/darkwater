@@ -39,10 +39,14 @@ func main() {
 		ingestDone <- ingest.Run(ctx, cfg, store)
 	}()
 
-	// 2) Web server runs in the foreground, reading from the store
+	// 2) Hub broadcasts changes to connected browsers once per second
+	hub := api.NewHub()
+	go hub.Run(ctx, store)
+
+	// 3) Web server runs in the foreground
 	srv := &http.Server{
 		Addr:    ":8080",
-		Handler: api.NewRouter(store),
+		Handler: api.NewRouter(store, hub),
 	}
 
 	// On Ctrl+C: stop accepting requests, give in-flight ones 5s to finish
@@ -58,7 +62,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Wait for the receiver to finish cleanly (flushes the recorder)
 	if err := <-ingestDone; err != nil {
 		log.Println("ingest: ", err)
 	}

@@ -1,0 +1,22 @@
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #0b0f14;
+  font-family: system-ui, sans-serif;
+}
+
+#map {
+  position: absolute;
+  inset: 0;
+}
+
+#hud {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(11, 15, 20, 0.8);
+  color: #cfe3f5;
+  font-size: 13px;
+}
