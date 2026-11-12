@@ -17,3 +17,10 @@
 
 ## Live map
 - Viewport filtering: snapshot 19.3 KB (zoomed out) → 2.7 KB (Copenhagen) = 86% smaller
+
+## DMA vs feed cross-check (2026-11-09, 19:35–19:40 UTC)
+- Clock: offsets peak at 0s / -1s → DMA timestamps are UTC (DMA truncates to whole seconds, hence -1s)
+- 76.6% of moving feed positions also appear in DMA; 148 of 566 feed ships absent from DMA entirely
+  → DMA covers Danish waters only; Swedish/German/Norwegian parts of the bounding box are outside its coverage
+  → DMA is ground truth only where DMA itself has coverage; reception model must account for this
+- 5-minute window: DMA saw 1,899 ships, feed 566, both 418 → feed saw 22% of DMA's ships
