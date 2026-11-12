@@ -15,9 +15,11 @@ const nowT = () => Date.now() / 1000 - BASE;
 const toT = (iso: string) => Date.parse(iso) / 1000 - BASE;
 
 // ---- State ----
-const ships = new Map<number, Ship>(); // MMSI -> latest report
+const ships = new Map<number, Ship>(); // MMSI -> latest report (in view)
 const history = new Map<number, Trip>(); // MMSI -> recent track
 let selected: number | null = null;
+let socket: WebSocket | null = null;
+let bytesThisSecond = 0;
 
 // Cached lists, rebuilt only when data changes (not every frame)
 let moving: Ship[] = [];
@@ -51,7 +53,6 @@ function rebuildData() {
   }
   // A trail needs at least 2 points to draw a line
   trips = Array.from(history.values()).filter((t) => t.path.length >= 2);
-  hud.textContent = `${ships.size} ships · ${moving.length} moving · live`;
 }
 
 // ---- Map ----
@@ -73,6 +74,30 @@ const overlay = new MapboxOverlay({
 });
 map.addControl(overlay);
 
+// ---- Viewport: tell the server what we're looking at ----
+function viewport() {
+  const b = map.getBounds();
+  // Pad by 20% so ships just off-screen are already loaded when panning
+  const padX = (b.getEast() - b.getWest()) * 0.2;
+  const padY = (b.getNorth() - b.getSouth()) * 0.2;
+  return {
+    type: "viewport",
+    west: Math.max(-180, b.getWest() - padX),
+    south: Math.max(-90, b.getSouth() - padY),
+    east: Math.min(180, b.getEast() + padX),
+    north: Math.min(90, b.getNorth() + padY),
+  };
+}
+
+function sendViewport() {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(viewport()));
+  }
+}
+
+// moveend fires once when panning/zooming stops, not on every frame of the drag
+map.on("moveend", sendViewport);
+
 // ---- Animation: only the clock moves each frame ----
 function frame() {
   overlay.setProps({
@@ -87,6 +112,15 @@ function frame() {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// ---- HUD: ships in view and data rate ----
+setInterval(() => {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    const kbps = (bytesThisSecond / 1024).toFixed(1);
+    hud.textContent = `${ships.size} in view · ${moving.length} moving · ${kbps} KB/s`;
+  }
+  bytesThisSecond = 0;
+}, 1000);
 
 // ---- Details panel ----
 const NAV_STATUS: Record<number, string> = {
@@ -144,23 +178,33 @@ setInterval(updatePanel, 1000); // keeps "last report" ticking
 // ---- Live data ----
 function connect() {
   const protocol = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${protocol}://${location.host}/api/ws`);
+  socket = new WebSocket(`${protocol}://${location.host}/api/ws`);
 
-  ws.onmessage = (event) => {
+  socket.onopen = sendViewport; // tell the server our view right away
+
+  socket.onmessage = (event) => {
+    bytesThisSecond += event.data.length;
     const msg: WsMessage = JSON.parse(event.data);
+
     if (msg.type === "snapshot") {
       ships.clear();
-      history.clear();
     }
     for (const s of msg.ships) {
       ships.set(s.mmsi, s);
       addToHistory(s);
     }
+    if (msg.type === "snapshot") {
+      // Keep trails for ships still in view, forget the rest
+      for (const mmsi of history.keys()) {
+        if (!ships.has(mmsi)) history.delete(mmsi);
+      }
+    }
+
     rebuildData();
     updatePanel();
   };
 
-  ws.onclose = () => {
+  socket.onclose = () => {
     hud.textContent = "reconnecting…";
     setTimeout(connect, 2000);
   };
