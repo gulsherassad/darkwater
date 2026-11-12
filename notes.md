@@ -30,3 +30,13 @@
 - NOT a fair coverage comparison yet: DMA = 24 h, feed = a few short sessions
 - 51 feed-only cells = waters outside DMA's coverage (Sweden/Germany/Norway), confirms Step 3
 - Busiest cells: ~100–112 distinct ships/day in DMA
+
+## Coverage map (H3 res 6)
+- DMA-only cells trace the traffic separation schemes (Skagerrak, Kattegat, Great Belt, Bornholm)
+- Hard western edge of DMA coverage in the North Sea = range limit of DMA shore receivers
+- Feed-only cells at the fringes: southern Norway, Karlskrona, Wadden Sea
+
+- 80-min run (2026-11-12, ~18:53–20:15 UTC): ship count plateaus at ~1,160 after ~1 h;
+  median per-ship gap stabilizes at ~3–4 min (early readings biased low by censoring)
+  → vs DMA's 10–30 s, feed passes on roughly 1 in 10–20 messages per ship
+- Rate steady at ~3 msg/s throughout → looks like a fixed cap on AISStream's side
