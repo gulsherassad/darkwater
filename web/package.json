@@ -17,6 +17,7 @@
     "@deck.gl/geo-layers": "^9.4.1",
     "@deck.gl/layers": "^9.4.1",
     "@deck.gl/mapbox": "^9.4.1",
+    "h3-js": "^4.5.0",
     "maplibre-gl": "^6.17.0"
   }
 }

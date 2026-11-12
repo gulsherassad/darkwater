@@ -42,7 +42,7 @@ func toShipJSON(ps []ais.Position) []shipJSON {
 }
 
 // NewRouter maps URLs to handler functions.
-func NewRouter(store *tracker.Store, hub *Hub) http.Handler {
+func NewRouter(store *tracker.Store, hub *Hub, coveragePath string) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/ships", func(w http.ResponseWriter, r *http.Request) {
@@ -54,6 +54,8 @@ func NewRouter(store *tracker.Store, hub *Hub) http.Handler {
 	})
 
 	mux.HandleFunc("GET /api/ws", hub.ServeWS(store))
+
+	mux.HandleFunc("GET /api/coverage", coverageHandler(coveragePath))
 
 	return mux
 }

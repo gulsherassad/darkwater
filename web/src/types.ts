@@ -22,3 +22,12 @@ export type Trip = {
   path: [number, number][]; // [lon, lat] points
   timestamps: number[]; // seconds since page load, one per point
 };
+
+// Same shape as coverageCell in internal/api/coverage.go
+export type CoverageCell = {
+  cell: string; // H3 cell ID
+  dmaMsgs: number;
+  dmaShips: number;
+  feedMsgs: number;
+  feedShips: number;
+};

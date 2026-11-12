@@ -3,11 +3,13 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import "./style.css";
 
-import type { Ship, Trip, WsMessage } from "./types";
+import type { CoverageCell, Ship, Trip, WsMessage } from "./types";
 import { buildLayers, isMoving, TRAIL_SECONDS } from "./layers";
 
 const hud = document.getElementById("hud")!;
 const panel = document.getElementById("panel")!;
+const toggle = document.getElementById("toggle-coverage") as HTMLButtonElement;
+const legend = document.getElementById("legend")!;
 
 // ---- Time: seconds since page load (small numbers, safe for the GPU) ----
 const BASE = Math.floor(Date.now() / 1000);
@@ -20,6 +22,8 @@ const history = new Map<number, Trip>(); // MMSI -> recent track
 let selected: number | null = null;
 let socket: WebSocket | null = null;
 let bytesThisSecond = 0;
+let coverage: CoverageCell[] = [];
+let showCoverage = false;
 
 // Cached lists, rebuilt only when data changes (not every frame)
 let moving: Ship[] = [];
@@ -65,14 +69,38 @@ const map = new maplibregl.Map({
 
 const overlay = new MapboxOverlay({
   layers: [],
-  getTooltip: ({ object }) => object && `${object.name || "Unknown"} (click for details)`,
+  getTooltip: ({ object }) => {
+    if (!object) return null;
+    if ("cell" in object) {
+      const c = object as CoverageCell;
+      return `Cell ${c.cell}\nDMA: ${c.dmaShips} ships · ${c.dmaMsgs} msgs\nFeed: ${c.feedShips} ships · ${c.feedMsgs} msgs`;
+    }
+    return `${(object as Ship).name || "Unknown"} (click for details)`;
+  },
   onClick: (info) => {
-    // Clicking a ship selects it; clicking empty water clears the selection
-    selected = info.object ? (info.object as Ship).mmsi : null;
+    // Clicking a ship selects it; clicking anything else clears the selection
+    const o = info.object;
+    selected = o && "mmsi" in o ? (o as Ship).mmsi : null;
     updatePanel();
   },
 });
 map.addControl(overlay);
+
+// ---- Coverage: load once, toggle with the button ----
+fetch("/api/coverage")
+  .then((res) => (res.ok ? res.json() : []))
+  .then((cells: CoverageCell[]) => {
+    coverage = cells;
+  })
+  .catch(() => {
+    coverage = [];
+  });
+
+toggle.addEventListener("click", () => {
+  showCoverage = !showCoverage;
+  legend.hidden = !showCoverage;
+  toggle.textContent = showCoverage ? "Hide coverage" : "Show coverage";
+});
 
 // ---- Viewport: tell the server what we're looking at ----
 function viewport() {
@@ -102,6 +130,7 @@ map.on("moveend", sendViewport);
 function frame() {
   overlay.setProps({
     layers: buildLayers({
+      coverage: showCoverage ? coverage : null,
       moving,
       stationary,
       trips,

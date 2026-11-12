@@ -24,3 +24,9 @@
   → DMA covers Danish waters only; Swedish/German/Norwegian parts of the bounding box are outside its coverage
   → DMA is ground truth only where DMA itself has coverage; reception model must account for this
 - 5-minute window: DMA saw 1,899 ships, feed 566, both 418 → feed saw 22% of DMA's ships
+
+## H3 grid (res 6, ~36 km² cells), DMA 2026-11-09 vs all feed recordings so far
+- 4,130 cells with data: both 614, DMA only 3,465, feed only 51
+- NOT a fair coverage comparison yet: DMA = 24 h, feed = a few short sessions
+- 51 feed-only cells = waters outside DMA's coverage (Sweden/Germany/Norway), confirms Step 3
+- Busiest cells: ~100–112 distinct ships/day in DMA

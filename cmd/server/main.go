@@ -28,11 +28,12 @@ func main() {
 
 	store := tracker.New()
 
-	// 1) Receiver runs in the background, writing to the store
+	// 1) Receiver runs in the background, writing to the store.
+	//    Its own recording folder, so it can run alongside cmd/ingest.
 	cfg := ingest.Config{
 		APIKey:    apiKey,
 		BBoxes:    ingest.Denmark,
-		RecordDir: "data/raw",
+		RecordDir: "data/raw-server",
 	}
 	ingestDone := make(chan error, 1)
 	go func() {
@@ -46,7 +47,7 @@ func main() {
 	// 3) Web server runs in the foreground
 	srv := &http.Server{
 		Addr:    ":8080",
-		Handler: api.NewRouter(store, hub),
+		Handler: api.NewRouter(store, hub, "data/grid/cells-res6.csv"),
 	}
 
 	// On Ctrl+C: stop accepting requests, give in-flight ones 5s to finish

@@ -9,6 +9,15 @@
     <div id="map"></div>
     <div id="hud">connecting…</div>
     <aside id="panel" hidden></aside>
+    <div id="controls">
+      <button id="toggle-coverage">Show coverage</button>
+      <div id="legend" hidden>
+        <div><span class="swatch both"></span>DMA + feed</div>
+        <div><span class="swatch dma"></span>DMA only</div>
+        <div><span class="swatch feed"></span>Feed only</div>
+        <small>Brighter = more ships</small>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
