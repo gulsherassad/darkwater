@@ -40,3 +40,14 @@
   median per-ship gap stabilizes at ~3–4 min (early readings biased low by censoring)
   → vs DMA's 10–30 s, feed passes on roughly 1 in 10–20 messages per ship
 - Rate steady at ~3 msg/s throughout → looks like a fixed cap on AISStream's side
+
+## Trajectory baselines (DMA 2026-11-09, test = after 18:00 UTC, moving ships ≥ 3 kn)
+| horizon | n | stay-put median / p90 | dead reckoning median / p90 |
+|---|---|---|---|
+| 5 min  | 13,816 | 1.32 / 2.01 km  | 0.02 / 0.31 km |
+| 15 min | 13,283 | 4.46 / 6.64 km  | 0.15 / 1.93 km |
+| 30 min | 12,562 | 9.01 / 13.28 km | 0.59 / 5.28 km |
+| 60 min | 11,266 | 17.70 / 26.17 km| 2.63 / 13.48 km |
+- Error is heavily skewed: median tiny, p90 10–20× larger → turning ships cause most error
+- Target metric for ML: p90, not median
+- Stay-put 60-min median 17.7 km ⇒ typical moving ship ~9.6 kn (sanity check)
