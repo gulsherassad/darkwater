@@ -34,3 +34,5 @@ go.work.sum
 .env
 data/
 .DS_Store
+ml/.venv/
+__pycache__/

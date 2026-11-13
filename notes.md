@@ -51,3 +51,8 @@
 - Error is heavily skewed: median tiny, p90 10–20× larger → turning ships cause most error
 - Target metric for ML: p90, not median
 - Stay-put 60-min median 17.7 km ⇒ typical moving ship ~9.6 kn (sanity check)
+
+## Trajectory training data (DMA 2026-11-09)
+- Splits by time, no leakage across boundaries: train 00–15 UTC (264k), val 15–18 (52k), test 18–24 (47.5k)
+- 10-point history (≤ 15 min), positions relative to current point, course as sin/cos; target = displacement at horizon
+- Exported set covers ~93% of harness questions (needs full history); Python reproduces Go's dead-reckoning numbers → format verified
