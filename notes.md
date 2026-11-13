@@ -68,3 +68,15 @@
 - Decision: hybrid — dead reckoning < 10 min, GRU ≥ 10 min
 - ONNX export verified against PyTorch (max diff 6.7e-6 km at batch 2000), 76 KB
 - Caveat: same-day train/test; cross-day test pending (Nov 12 data)
+
+## Official trajectory results (Go harness, full test set 18–24 UTC Nov 9, 50,927 questions)
+| horizon | DR median / p90 | hybrid median / p90 | p90 change |
+|---|---|---|---|
+| 5 min  | 0.02 / 0.31 km | 0.02 / 0.31 km | 0% (DR) |
+| 15 min | 0.15 / 1.93 km | 0.26 / 1.73 km | −10.3% |
+| 30 min | 0.59 / 5.28 km | 0.75 / 4.60 km | −12.9% |
+| 60 min | 2.63 / 13.48 km| 2.64 / 11.55 km| −14.3% |
+- Hybrid = dead reckoning < 10 min, GRU ≥ 10 min; never worse than DR
+- Go ONNX results match Python within ~2 points → no training/serving skew; 0 model errors
+- GRU falls back to DR when history is incomplete (3,676 calls)
+- Caveat: same-day test; cross-day test pending
