@@ -56,3 +56,15 @@
 - Splits by time, no leakage across boundaries: train 00–15 UTC (264k), val 15–18 (52k), test 18–24 (47.5k)
 - 10-point history (≤ 15 min), positions relative to current point, course as sin/cos; target = displacement at horizon
 - Exported set covers ~93% of harness questions (needs full history); Python reproduces Go's dead-reckoning numbers → format verified
+
+## Residual GRU (hidden 64, Huber loss, early stop on val p90; trained 00–15 UTC Nov 9)
+| horizon | DR median / p90 | GRU median / p90 | p90 change |
+|---|---|---|---|
+| 5 min  | 0.02 / 0.26 km | 0.11 / 0.36 km | +37.6% |
+| 15 min | 0.14 / 1.80 km | 0.25 / 1.62 km | −10.4% |
+| 30 min | 0.56 / 5.18 km | 0.72 / 4.53 km | −12.5% |
+| 60 min | 2.52 / 13.47 km| 2.57 / 11.30 km| −16.1% |
+- GRU wins the tail (turns) at ≥ 15 min, loses at 5 min (adds small noise to near-perfect straight-line predictions)
+- Decision: hybrid — dead reckoning < 10 min, GRU ≥ 10 min
+- ONNX export verified against PyTorch (max diff 6.7e-6 km at batch 2000), 76 KB
+- Caveat: same-day train/test; cross-day test pending (Nov 12 data)
