@@ -89,3 +89,13 @@
 | 60 min | −14.3% | −13.8% |
 - Gains hold on an unseen day → model learned general turning patterns, not one day's voyages
 - 0 model errors; Nov 12 DMA stats nearly identical to Nov 9 (15.97M rows, 2,825 ships, 92.3% gaps < 30 s)
+
+## Reception model (Nov 12, 99 feed-alive minutes, H3 res 6, prior strength 20)
+- Split ships by FNV hash of MMSI (parity split was biased: big ships' MMSIs end in zeros → even)
+- Overall hearing chance 8.6%/min; per-cell spread 1.4% (10th pct) → 6.2% (median) → 20.9% (90th pct)
+- Silence needed to flag (good / typical / poor): α=0.05 → 13 / 48 / 206 min; α=0.01 → 20 / 73 / 316 min
+- False alarms on eval ships (all confirmed transmitting by DMA), 3,004 gaps over 1,145 ship-hours:
+  - naive ≥ 20 min: 35 vs model α=0.01: 3 → 91% fewer at same good-coverage sensitivity
+  - naive ≥ 15 min: 72 vs model α=0.05: 22 → 69% fewer while flagging sooner (13 min)
+- Limitation: can only detect short dark periods where feed coverage is good
+- Preliminary: small sample; re-run with more recorded hours
