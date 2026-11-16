@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
 	"math"
@@ -36,6 +38,16 @@ type gap struct {
 	logP    float64
 }
 
+// inFitSet splits ships into two random halves. MMSIs aren't random
+// (big ships often end in zeros), so we hash them first.
+func inFitSet(mmsi int64) bool {
+	h := fnv.New32a()
+	var b [8]byte
+	binary.LittleEndian.PutUint64(b[:], uint64(mmsi))
+	h.Write(b[:])
+	return h.Sum32()%2 == 0
+}
+
 func percentile(xs []float64, p float64) float64 {
 	if len(xs) == 0 {
 		return 0
@@ -43,6 +55,12 @@ func percentile(xs []float64, p float64) float64 {
 	s := append([]float64(nil), xs...)
 	sort.Float64s(s)
 	return s[int(p*float64(len(s)-1))]
+}
+
+// minutesToFlag: how long a ship must be silent in a cell with hearing
+// chance p before the model flags it at level alpha.
+func minutesToFlag(p, alpha float64) float64 {
+	return math.Ceil(math.Log(alpha) / math.Log(1-p))
 }
 
 func main() {
@@ -100,10 +118,10 @@ func main() {
 		}
 	}
 
-	// 3) Fit on even MMSIs; keep counts for all ships for the saved model
+	// 3) Fit on one random half of ships; keep counts for all ships for the saved model
 	fitCounts := map[h3.Cell]reception.Counts{}
 	allCounts := map[h3.Cell]reception.Counts{}
-	evalShips := map[int64][]int64{} // odd MMSIs -> minutes present
+	evalShips := map[int64][]int64{} // other half -> minutes present
 	fitMinutes := 0
 	for k, c := range present {
 		h := 0
@@ -115,7 +133,7 @@ func main() {
 		a.Heard += h
 		allCounts[c] = a
 
-		if k.mmsi%2 == 0 {
+		if inFitSet(k.mmsi) {
 			fc := fitCounts[c]
 			fc.Present++
 			fc.Heard += h
@@ -127,7 +145,7 @@ func main() {
 	}
 	model := reception.Fit(fitCounts, priorStrength)
 
-	// 4) Find feed gaps on odd-MMSI ships, while DMA confirms they kept transmitting
+	// 4) Find feed gaps on eval ships, while DMA confirms they kept transmitting
 	var gaps []gap
 	evalMinutes := 0
 	for mmsi, minutes := range evalShips {
@@ -167,14 +185,22 @@ func main() {
 			probs = append(probs, model.Prob(c))
 		}
 	}
-	fmt.Printf("\nper-cell hearing chance (%d cells with ≥ %d ship-minutes):\n", len(probs), minCellData)
+	fmt.Printf("\nsilent minutes needed before the model flags (%d cells with ≥ %d ship-minutes):\n", len(probs), minCellData)
+	fmt.Printf("  %-17s %8s", "coverage", "hearing")
+	for _, a := range alphas {
+		fmt.Printf("  α=%-6g", a)
+	}
+	fmt.Println()
 	for _, q := range []struct {
 		label string
 		p     float64
 	}{{"poor (10th pct)", 0.1}, {"typical (median)", 0.5}, {"good (90th pct)", 0.9}} {
 		p := percentile(probs, q.p)
-		need := math.Ceil(math.Log(0.01) / math.Log(1-p))
-		fmt.Printf("  %-17s %5.1f%%  → needs %4.0f silent minutes to flag at α=0.01\n", q.label, 100*p, need)
+		fmt.Printf("  %-17s %7.1f%%", q.label, 100*p)
+		for _, a := range alphas {
+			fmt.Printf("  %5.0f min", minutesToFlag(p, a))
+		}
+		fmt.Println()
 	}
 
 	hours := float64(evalMinutes) / 60
