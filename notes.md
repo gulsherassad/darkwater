@@ -80,3 +80,12 @@
 - Go ONNX results match Python within ~2 points → no training/serving skew; 0 model errors
 - GRU falls back to DR when history is incomplete (3,676 calls)
 - Caveat: same-day test; cross-day test pending
+
+## Cross-day test (model trained Nov 9, tested Nov 12 18–24 UTC, 44,273 questions)
+| horizon | same day (Nov 9) | unseen day (Nov 12) |
+|---|---|---|
+| 15 min | −10.3% | −7.6% |
+| 30 min | −12.9% | −12.3% |
+| 60 min | −14.3% | −13.8% |
+- Gains hold on an unseen day → model learned general turning patterns, not one day's voyages
+- 0 model errors; Nov 12 DMA stats nearly identical to Nov 9 (15.97M rows, 2,825 ships, 92.3% gaps < 30 s)
