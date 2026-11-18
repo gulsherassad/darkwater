@@ -22,6 +22,7 @@ import (
 const (
 	priorStrength = 20.0
 	minCellData   = 30 // ship-minutes before a cell counts in the spread stats
+	maxInterpMin  = 15 // fill DMA gaps up to this long (ship was obviously still there)
 	outPath       = "data/grid/reception-res6.csv"
 )
 
@@ -31,6 +32,11 @@ var alphas = []float64{0.05, 0.01, 0.001}
 type key struct {
 	mmsi   int64
 	minute int64
+}
+
+type fix struct {
+	minute   int64
+	lat, lon float64
 }
 
 type gap struct {
@@ -72,6 +78,7 @@ func main() {
 	// 1) Feed: which ships it heard in which minute, and which minutes it was alive
 	heard := map[key]bool{}
 	alive := map[int64]bool{}
+	var firstAlive, lastAlive int64 = math.MaxInt64, 0
 	for _, path := range os.Args[2:] {
 		_, err := replay.ReadFile(path, func(p ais.Position) {
 			if !grid.InDenmark(p) {
@@ -80,13 +87,15 @@ func main() {
 			m := p.Time.Unix() / 60
 			heard[key{p.MMSI, m}] = true
 			alive[m] = true
+			firstAlive = min(firstAlive, m)
+			lastAlive = max(lastAlive, m)
 		})
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
 
-	// 2) DMA: which ships were present in which cell, during minutes the feed was alive
+	// 2) DMA: one fix per ship per minute, around the feed's alive period
 	f, err := os.Open(os.Args[1])
 	if err != nil {
 		log.Fatal(err)
@@ -96,7 +105,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	present := map[key]h3.Cell{}
+	fixes := map[int64][]fix{}
 	for {
 		p, reason, err := rd.Next()
 		if err == io.EOF {
@@ -109,16 +118,49 @@ func main() {
 			continue
 		}
 		m := p.Time.Unix() / 60
-		if !alive[m] {
-			continue // feed wasn't recording: silence here says nothing
+		if m < firstAlive-maxInterpMin || m > lastAlive+maxInterpMin {
+			continue // far from any minute we can use
 		}
-		k := key{p.MMSI, m}
-		if _, seen := present[k]; !seen {
-			present[k] = grid.CellOf(p) // first position in that minute
+		fs := fixes[p.MMSI]
+		if n := len(fs); n > 0 && fs[n-1].minute >= m {
+			continue // already have a fix for this minute
+		}
+		fixes[p.MMSI] = append(fs, fix{m, p.Lat, p.Lon})
+	}
+
+	// 3) Presence: DMA's own fixes, plus interpolated minutes inside short DMA gaps
+	present := map[key]h3.Cell{}
+	observed, interpolated := 0, 0
+	add := func(mmsi, m int64, lat, lon float64, isFix bool) {
+		if !alive[m] {
+			return // feed wasn't recording: silence here says nothing
+		}
+		present[key{mmsi, m}] = grid.CellOf(ais.Position{Lat: lat, Lon: lon})
+		if isFix {
+			observed++
+		} else {
+			interpolated++
+		}
+	}
+	for mmsi, fs := range fixes {
+		for i, a := range fs {
+			add(mmsi, a.minute, a.lat, a.lon, true)
+			if i+1 == len(fs) {
+				break
+			}
+			b := fs[i+1]
+			span := b.minute - a.minute
+			if span <= 1 || span > maxInterpMin {
+				continue // consecutive minutes, or a gap too long to trust
+			}
+			for m := a.minute + 1; m < b.minute; m++ {
+				t := float64(m-a.minute) / float64(span)
+				add(mmsi, m, a.lat+t*(b.lat-a.lat), a.lon+t*(b.lon-a.lon), false)
+			}
 		}
 	}
 
-	// 3) Fit on one random half of ships; keep counts for all ships for the saved model
+	// 4) Fit on one random half of ships; keep counts for all ships for the saved model
 	fitCounts := map[h3.Cell]reception.Counts{}
 	allCounts := map[h3.Cell]reception.Counts{}
 	evalShips := map[int64][]int64{} // other half -> minutes present
@@ -145,7 +187,7 @@ func main() {
 	}
 	model := reception.Fit(fitCounts, priorStrength)
 
-	// 4) Find feed gaps on eval ships, while DMA confirms they kept transmitting
+	// 5) Find feed gaps on eval ships, while DMA confirms they were still there
 	var gaps []gap
 	evalMinutes := 0
 	for mmsi, minutes := range evalShips {
@@ -157,7 +199,7 @@ func main() {
 		var prev int64 = -1
 		for _, m := range minutes {
 			if prev >= 0 && m != prev+1 {
-				afterHeard, silent = false, nil // DMA lost the ship: can't judge this stretch
+				afterHeard, silent = false, nil // lost the ship: can't judge this stretch
 			}
 			k := key{mmsi, m}
 			if heard[k] {
@@ -172,10 +214,11 @@ func main() {
 		}
 	}
 
-	// 5) Report
+	// 6) Report
 	fmt.Printf("feed alive: %d minutes\n", len(alive))
-	fmt.Printf("ship-minutes in DMA during those minutes: %d (fit %d, eval %d)\n",
-		len(present), fitMinutes, evalMinutes)
+	fmt.Printf("ship-minutes present: %d (%d observed by DMA, %d interpolated across DMA gaps ≤ %d min)\n",
+		len(present), observed, interpolated, maxInterpMin)
+	fmt.Printf("split: fit %d, eval %d\n", fitMinutes, evalMinutes)
 	fmt.Printf("overall chance the feed hears a present ship in a given minute: %.1f%% (≈ 1 message every %.1f min)\n",
 		100*model.Global, 1/model.Global)
 
@@ -204,7 +247,7 @@ func main() {
 	}
 
 	hours := float64(evalMinutes) / 60
-	fmt.Printf("\nFALSE ALARMS on eval ships (DMA confirms all were transmitting)\n")
+	fmt.Printf("\nFALSE ALARMS on eval ships (DMA confirms all were still present)\n")
 	fmt.Printf("%d feed gaps over %.0f ship-hours\n\n", len(gaps), hours)
 	fmt.Printf("  %-34s %8s %12s\n", "rule", "alarms", "per 100 h")
 	for _, n := range naiveMinutes {
@@ -226,7 +269,7 @@ func main() {
 		fmt.Printf("  %-34s %8d %12.1f\n", fmt.Sprintf("reception model: α = %g", a), c, 100*float64(c)/hours)
 	}
 
-	// 6) Save the model fitted on ALL ships, for the live detector
+	// 7) Save the model fitted on ALL ships, for the live detector
 	if err := reception.Fit(allCounts, priorStrength).Save(outPath); err != nil {
 		log.Fatal(err)
 	}

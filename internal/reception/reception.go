@@ -2,6 +2,7 @@ package reception
 
 import (
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -34,6 +35,11 @@ func Fit(counts map[h3.Cell]Counts, strength float64) *Model {
 		global = float64(heard) / float64(present)
 	}
 	return &Model{Global: global, Strength: strength, cells: counts}
+}
+
+// Data returns the raw counts for a cell (zero if we have no data there).
+func (m *Model) Data(c h3.Cell) Counts {
+	return m.cells[c]
 }
 
 // Prob is the chance the feed hears a ship in cell c during one minute.
@@ -83,4 +89,37 @@ func (m *Model) Save(path string) error {
 	}
 	w.Flush()
 	return w.Error()
+}
+
+// Load reads a model saved by Save. Probabilities are recomputed from
+// the counts, so the prior strength can be changed without re-fitting.
+func Load(path string, strength float64) (*Model, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	rows, err := csv.NewReader(f).ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) < 2 {
+		return nil, errors.New("reception model file is empty")
+	}
+
+	counts := map[h3.Cell]Counts{}
+	for _, r := range rows[1:] {
+		if len(r) < 3 {
+			continue
+		}
+		id, err := strconv.ParseUint(r[0], 16, 64) // cell IDs are written in hex
+		if err != nil {
+			return nil, fmt.Errorf("bad cell %q: %w", r[0], err)
+		}
+		present, _ := strconv.Atoi(r[1])
+		heard, _ := strconv.Atoi(r[2])
+		counts[h3.Cell(id)] = Counts{Present: present, Heard: heard}
+	}
+	return Fit(counts, strength), nil
 }

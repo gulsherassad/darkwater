@@ -2,6 +2,7 @@ package reception
 
 import (
 	"math"
+	"path/filepath"
 	"testing"
 
 	h3 "github.com/uber/h3-go/v4"
@@ -41,5 +42,24 @@ func TestSilenceLogProb(t *testing.T) {
 	want := math.Pow(1-p, 3)
 	if math.Abs(got-want) > 1e-12 {
 		t.Fatalf("3 silent minutes: want %.6f, got %.6f", want, got)
+	}
+}
+
+func TestSaveLoad(t *testing.T) {
+	a, b := cell(55.7, 12.6), cell(57.0, 11.0)
+	m := Fit(map[h3.Cell]Counts{a: {Present: 400, Heard: 100}, b: {Present: 50, Heard: 2}}, 20)
+
+	path := filepath.Join(t.TempDir(), "model.csv")
+	if err := m.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []h3.Cell{a, b} {
+		if math.Abs(loaded.Prob(c)-m.Prob(c)) > 1e-12 || loaded.Data(c) != m.Data(c) {
+			t.Fatalf("cell %s changed after save/load", c)
+		}
 	}
 }
