@@ -99,3 +99,15 @@
   - naive ≥ 15 min: 72 vs model α=0.05: 22 → 69% fewer while flagging sooner (13 min)
 - Limitation: can only detect short dark periods where feed coverage is good
 - Preliminary: small sample; re-run with more recorded hours
+
+## Reception model v2: DMA presence interpolated across gaps ≤ 15 min
+- Bug found via SWAN ATLANTIC false alarm: DMA hears ships sporadically at its fringe → model only counted
+  DMA's good-reception minutes → overestimated feed hearing chance (selection bias)
+- 32% of present ship-minutes were missing from DMA (62,055 of 191,797 interpolated)
+- Hearing chance 6.1%/min overall; 0.7% (10th pct) / 3.0% (median) / 18.9% (90th pct)
+- False alarms, 3,924 gaps over 1,665 ship-hours:
+  - naive ≥ 15 min: 213 vs model α=0.05 (flags at 15 min in good coverage): 55 → 74% fewer (matched)
+  - naive ≥ 20 min: 132 vs α=0.01 (22 min): 15 → 89% fewer
+  - naive ≥ 30 min: 40 vs α=0.001 (33 min): 5 → 88% fewer
+- Feed-outage rule: silences spanning > 5 min of feed downtime aren't judged (removed 15 false flags in gapscan)
+- gapscan at α=0.01: 3 of 150 judged ships flagged ≈ chance level (multiple testing) → live: watch α=0.01, alert α=0.001
