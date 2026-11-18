@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gulsherassad/darkwater/internal/ais"
+	"github.com/gulsherassad/darkwater/internal/detect"
 	"github.com/gulsherassad/darkwater/internal/tracker"
 )
 
@@ -41,8 +42,9 @@ func toShipJSON(ps []ais.Position) []shipJSON {
 	return out
 }
 
-// NewRouter maps URLs to handler functions.
-func NewRouter(store *tracker.Store, hub *Hub, coveragePath string) http.Handler {
+// NewRouter maps URLs to handler functions. monitor may be nil
+// (no reception model available), in which case /api/alerts is empty.
+func NewRouter(store *tracker.Store, hub *Hub, coveragePath string, monitor *detect.Monitor) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/ships", func(w http.ResponseWriter, r *http.Request) {
@@ -50,12 +52,20 @@ func NewRouter(store *tracker.Store, hub *Hub, coveragePath string) http.Handler
 	})
 
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"status": "ok", "ships": store.Len()})
+		writeJSON(w, map[string]any{"status": "ok", "ships": store.Len(), "detector": monitor != nil})
 	})
 
 	mux.HandleFunc("GET /api/ws", hub.ServeWS(store))
 
 	mux.HandleFunc("GET /api/coverage", coverageHandler(coveragePath))
+
+	mux.HandleFunc("GET /api/alerts", func(w http.ResponseWriter, r *http.Request) {
+		if monitor == nil {
+			writeJSON(w, []detect.Alert{})
+			return
+		}
+		writeJSON(w, monitor.Current())
+	})
 
 	return mux
 }

@@ -56,7 +56,7 @@ func ScoreGap(m *reception.Model, last ais.Position, now time.Time, alive FeedAl
 			res.FeedDownMinutes++
 			continue // our feed wasn't listening: not the ship's fault
 		}
-		lat, lon := project(last, float64(i))
+		lat, lon := Project(last, float64(i))
 		p := ais.Position{Lat: lat, Lon: lon}
 		if !grid.InDenmark(p) {
 			continue // outside the study area: no evidence
@@ -76,8 +76,8 @@ func ScoreGap(m *reception.Model, last ais.Position, now time.Time, alive FeedAl
 	return res
 }
 
-// project: where the ship probably is after `minutes`, by dead reckoning.
-func project(last ais.Position, minutes float64) (float64, float64) {
+// Project: where the ship probably is after `minutes`, by dead reckoning.
+func Project(last ais.Position, minutes float64) (float64, float64) {
 	if last.SpeedKn < 0 || last.CourseDeg < 0 {
 		return last.Lat, last.Lon
 	}

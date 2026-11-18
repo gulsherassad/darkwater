@@ -10,6 +10,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/gulsherassad/darkwater/internal/ais"
+	"github.com/gulsherassad/darkwater/internal/liveness"
 	"github.com/gulsherassad/darkwater/internal/recorder"
 	"github.com/gulsherassad/darkwater/internal/tracker"
 )
@@ -27,6 +28,7 @@ type Config struct {
 	APIKey    string
 	BBoxes    [][][]float64
 	RecordDir string
+	Liveness  *liveness.Tracker // optional: records which minutes the feed was alive
 }
 
 // Run ingests until ctx is cancelled, reconnecting whenever the stream drops.
@@ -115,6 +117,9 @@ func runOnce(ctx context.Context, cfg Config, store *tracker.Store, rec *recorde
 		pos, ok := env.ToPosition()
 		if !ok {
 			continue
+		}
+		if cfg.Liveness != nil {
+			cfg.Liveness.Mark(pos.Time) // the feed is alive this minute
 		}
 		if reason := pos.Validate(); reason != "" {
 			rejected[reason]++

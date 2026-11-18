@@ -12,8 +12,17 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/gulsherassad/darkwater/internal/api"
+	"github.com/gulsherassad/darkwater/internal/detect"
 	"github.com/gulsherassad/darkwater/internal/ingest"
+	"github.com/gulsherassad/darkwater/internal/liveness"
+	"github.com/gulsherassad/darkwater/internal/reception"
 	"github.com/gulsherassad/darkwater/internal/tracker"
+)
+
+const (
+	receptionPath = "data/grid/reception-res6.csv"
+	coveragePath  = "data/grid/cells-res6.csv"
+	scanEvery     = 30 * time.Second
 )
 
 func main() {
@@ -27,27 +36,38 @@ func main() {
 	defer stop()
 
 	store := tracker.New()
+	live := liveness.New(detect.MaxSilence + time.Hour)
 
-	// 1) Receiver runs in the background, writing to the store.
-	//    Its own recording folder, so it can run alongside cmd/ingest.
+	// 1) Receiver runs in the background, writing to the store
 	cfg := ingest.Config{
 		APIKey:    apiKey,
 		BBoxes:    ingest.Denmark,
 		RecordDir: "data/raw-server",
+		Liveness:  live,
 	}
 	ingestDone := make(chan error, 1)
 	go func() {
 		ingestDone <- ingest.Run(ctx, cfg, store)
 	}()
 
-	// 2) Hub broadcasts changes to connected browsers once per second
+	// 2) Hub broadcasts ship changes to connected browsers once per second
 	hub := api.NewHub()
 	go hub.Run(ctx, store)
 
-	// 3) Web server runs in the foreground
+	// 3) Detector: re-scores every ship every 30 s (if the reception model exists)
+	var monitor *detect.Monitor
+	if model, err := reception.Load(receptionPath, 20); err != nil {
+		log.Printf("detector off: %v (run cmd/reception to build the model)", err)
+	} else {
+		monitor = detect.NewMonitor(model, store, live.Alive)
+		go monitor.Run(ctx, scanEvery, nil)
+		log.Printf("detector on: scanning every %s", scanEvery)
+	}
+
+	// 4) Web server runs in the foreground
 	srv := &http.Server{
 		Addr:    ":8080",
-		Handler: api.NewRouter(store, hub, "data/grid/cells-res6.csv"),
+		Handler: api.NewRouter(store, hub, coveragePath, monitor),
 	}
 
 	// On Ctrl+C: stop accepting requests, give in-flight ones 5s to finish
