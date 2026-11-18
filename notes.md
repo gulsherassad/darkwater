@@ -111,3 +111,10 @@
   - naive ≥ 30 min: 40 vs α=0.001 (33 min): 5 → 88% fewer
 - Feed-outage rule: silences spanning > 5 min of feed downtime aren't judged (removed 15 false flags in gapscan)
 - gapscan at α=0.01: 3 of 150 judged ships flagged ≈ chance level (multiple testing) → live: watch α=0.01, alert α=0.001
+
+## Live detector, overnight run (Nov 17 22:31 → Nov 18 12:23 PT)
+- Laptop slept ~23:13–09:40: every scan "0 judged" → feed-outage rule prevented ~1,100 false alerts on wake
+- Receiver survived repeated drops, network unreachable, and an IP change (moved networks); backoff capped at 1 min
+- Steady state: ~110–160 ships judged per 30 s scan; watch 0–2, alert 0–2 (brief), mostly 0 — consistent with multiple-testing expectations
+- Gap: monitor logs only counts → need per-ship alert event log to verify against DMA (Step 3)
+- Recorded ~3 h of Nov 18 UTC overlap → rerun reception model with aisdk-2026-11-18 (~Nov 21)
