@@ -25,10 +25,11 @@ const (
 var Denmark = [][][]float64{{{54.0, 7.0}, {58.5, 16.0}}}
 
 type Config struct {
-	APIKey    string
-	BBoxes    [][][]float64
-	RecordDir string
-	Liveness  *liveness.Tracker // optional: records which minutes the feed was alive
+	APIKey     string
+	BBoxes     [][][]float64
+	RecordDir  string
+	Liveness   *liveness.Tracker  // optional: records which minutes the feed was alive
+	OnPosition func(ais.Position) // optional: called for every accepted position
 }
 
 // Run ingests until ctx is cancelled, reconnecting whenever the stream drops.
@@ -129,6 +130,9 @@ func runOnce(ctx context.Context, cfg Config, store *tracker.Store, rec *recorde
 		if !ok {
 			rejected["stale"]++
 			continue
+		}
+		if cfg.OnPosition != nil {
+			cfg.OnPosition(pos)
 		}
 		if gap > 0 {
 			windowGaps = append(windowGaps, gap)

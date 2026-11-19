@@ -42,9 +42,9 @@ func toShipJSON(ps []ais.Position) []shipJSON {
 	return out
 }
 
-// NewRouter maps URLs to handler functions. monitor may be nil
-// (no reception model available), in which case /api/alerts is empty.
-func NewRouter(store *tracker.Store, hub *Hub, coveragePath string, monitor *detect.Monitor) http.Handler {
+// NewRouter maps URLs to handler functions. monitor and spoof may be nil.
+func NewRouter(store *tracker.Store, hub *Hub, coveragePath string,
+	monitor *detect.Monitor, spoof *detect.SpoofDetector) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/ships", func(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +65,14 @@ func NewRouter(store *tracker.Store, hub *Hub, coveragePath string, monitor *det
 			return
 		}
 		writeJSON(w, monitor.Current())
+	})
+
+	mux.HandleFunc("GET /api/spoof", func(w http.ResponseWriter, r *http.Request) {
+		if spoof == nil {
+			writeJSON(w, []detect.SpoofEvent{})
+			return
+		}
+		writeJSON(w, spoof.Recent())
 	})
 
 	return mux

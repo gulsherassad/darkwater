@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -25,9 +26,26 @@ import (
 const (
 	receptionPath = "data/grid/reception-res6.csv"
 	coveragePath  = "data/grid/cells-res6.csv"
-	alertLogDir   = "data/alerts"
+	eventLogDir   = "data/alerts"
 	scanEvery     = 30 * time.Second
 )
+
+// eventLog lets several goroutines write to one log file safely.
+type eventLog struct {
+	mu  sync.Mutex
+	rec *recorder.Recorder
+}
+
+func (l *eventLog) write(v any, t time.Time) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.rec.Write(b, t)
+	l.rec.Flush() // events are rare: write each one immediately
+}
 
 func main() {
 	watchAlpha := flag.Float64("watch", 0.01, "flag as watch below this silence chance")
@@ -46,12 +64,28 @@ func main() {
 	store := tracker.New()
 	live := liveness.New(detect.MaxSilence + time.Hour)
 
+	rec, err := recorder.New(eventLogDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rec.Close()
+	events := &eventLog{rec: rec}
+
+	// Spoofing: every accepted position is checked against the ship's previous one
+	spoof := detect.NewSpoofDetector()
+	spoof.OnEvent = func(e detect.SpoofEvent) {
+		events.write(e, e.Time)
+		log.Printf("spoof: %-14s %-20s %9d  %.1f km in %.0f s (%.0f kn)",
+			e.Kind, e.Name, e.MMSI, e.Km, e.Seconds, e.ImpliedKn)
+	}
+
 	// 1) Receiver runs in the background, writing to the store
 	cfg := ingest.Config{
-		APIKey:    apiKey,
-		BBoxes:    ingest.Denmark,
-		RecordDir: "data/raw-server",
-		Liveness:  live,
+		APIKey:     apiKey,
+		BBoxes:     ingest.Denmark,
+		RecordDir:  "data/raw-server",
+		Liveness:   live,
+		OnPosition: spoof.Observe,
 	}
 	ingestDone := make(chan error, 1)
 	go func() {
@@ -62,26 +96,15 @@ func main() {
 	hub := api.NewHub()
 	go hub.Run(ctx, store)
 
-	// 3) Detector: re-scores every ship every 30 s (if the reception model exists)
+	// 3) Dark-ship detector: re-scores every ship every 30 s (if the reception model exists)
 	var monitor *detect.Monitor
 	if model, err := reception.Load(receptionPath, 20); err != nil {
 		log.Printf("detector off: %v (run cmd/reception to build the model)", err)
 	} else {
-		events, err := recorder.New(alertLogDir)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer events.Close()
-
 		monitor = detect.NewMonitor(model, store, live.Alive)
 		monitor.WatchAlpha, monitor.AlertAlpha = *watchAlpha, *alertAlpha
 		monitor.OnEvent = func(e detect.Event) {
-			b, err := json.Marshal(e)
-			if err != nil {
-				return
-			}
-			events.Write(b, e.Time)
-			events.Flush() // events are rare: write each one immediately
+			events.write(e, e.Time)
 			log.Printf("event: %-10s %-20s %9d  %s  silent %d min", e.Kind, e.Name, e.MMSI, e.Level, e.SilentMinutes)
 		}
 		go monitor.Run(ctx, scanEvery, hub.BroadcastAlerts)
@@ -91,7 +114,7 @@ func main() {
 	// 4) Web server runs in the foreground
 	srv := &http.Server{
 		Addr:    ":8080",
-		Handler: api.NewRouter(store, hub, coveragePath, monitor),
+		Handler: api.NewRouter(store, hub, coveragePath, monitor, spoof),
 	}
 
 	// On Ctrl+C: stop accepting requests, give in-flight ones 5s to finish
