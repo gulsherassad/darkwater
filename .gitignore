@@ -36,3 +36,4 @@ data/
 .DS_Store
 ml/.venv/
 __pycache__/
+*.txt

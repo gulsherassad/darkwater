@@ -131,3 +131,8 @@
 - 28,608 positions / 1,552 ships → 2 teleports (1 ship), 0 identity clashes
 - ALICE 244790715: 2 teleports at 2,509 kn = single bad fix out and back (GPS glitch)
 - Future: tell clash vs glitch apart by checking whether the far positions form their own consistent track
+
+## Encounter scan (3.2 h, data/raw-server)
+- v1 mask (AIS "moored" status only): 548 encounters, 217 candidates/scan. Small harbours (FN/VG fishing boats) never report moored; n boats at one quay = n(n-1)/2 pairs
+- v2 mask (3+ distinct ships < 0.5 kn per ~1 km square): 159 port squares, 86 candidates/scan, 32 encounters (-94%)
+- Remaining 32 = rescue/pilot boats at 2-boat bases, same pairs both sessions. Indistinguishable from STS by position alone → need ShipStaticData (type, draught)
