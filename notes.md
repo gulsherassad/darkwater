@@ -166,3 +166,32 @@
 - Overall hybrid gains (−7.2 / −10.0 / −15.2%) are diluted by the ~16.5% fallback questions, which are also harder
   (DR p90 on them: 2.29 / 5.75 / 14.31 km vs 1.76 / 5.04 / 13.19 km where the GRU runs)
 - Future work: K=4 or zero-padded sparse variant (new feature version + retrain) to cover the ~16.5% fallback questions
+
+## Synthetic switch-off injection (cmd/inject, DMA Nov 12 + data/raw/2026-11-12T*.jsonl)
+- Method: held-out ships (FNV split), reception model refit on fit-set ships only (prior 20, 6.1%/min overall);
+  random switch-off time T per ship × 5 seeds where DMA shows ≥ 3 kn at T and presence for 2 h after; feed fixes after T deleted;
+  detect.ScoreGap scored minute by minute from T, unchanged. Watch ends at end of feed data or a feed outage (> MaxFeedDownMin) = censored, not missed.
+  Detection rates are Kaplan–Meier; n = injections detected by then or still under watch.
+- Controls: 2,012 real feed gaps on 160 held-out ships where DMA shows present + moving (≥ 1 kn) throughout; 119.9 ship-hours watched
+- n: 765 injections (153 eligible ships of 1,135); 496 censored at end of feed, 269 at the 17:48–18:53 feed outage, 0 watched the full 6 h; longest watch 81 min
+  → ≤ 2 h rates and medians are NOT estimable from this data (needs a longer DMA/feed overlap: Nov 18)
+
+| rule | alarms | per 100 h | ≤ 30 min (n) | ≤ 1 h (n) | median |
+|---|---|---|---|---|---|
+| model α=0.05   | 3  | 2.50  | 22.8% (296) | 31.0% (175) | not reached |
+| model α=0.01   | 0  | 0     | 15.3% (285) | 24.8% (149) | not reached |
+| model α=0.001  | 0  | 0     | 1.3% (278)  | 13.8% (120) | not reached |
+| model α=0.0001 | 0  | 0     | 0.0% (276)  | 7.6% (110)  | not reached |
+| naive ≥ 15 min | 36 | 30.03 | 100% (491)  | 100% (491)  | 13 min |
+| naive ≥ 30 min | 5  | 4.17  | 100% (303)  | 100% (303)  | 28 min |
+| naive ≥ 60 min | 0  | 0     | 0% (276)    | 100% (119)  | 58 min |
+- 0 alarms in 119.9 ship-hours only bounds the rate at < 2.5 per 100 h (95%): controls too small to separate α ≤ 0.01 from naive ≥ 60 min
+- Matched false alarms: α=0.05 (2.5/100 h) vs naive ≥ 30 (4.2/100 h): 31% vs 100% within 1 h; α ≤ 0.01 vs naive ≥ 60 (both 0 alarms): 8–25% vs 100%
+- By reception at T (α=0.001, ≤ 1 h; terciles of cell hearing chance among judgeable cells):
+  poor < 9.9%: 7.4% (n=12) · median 9.9–16.6%: 34.8% (25) · good ≥ 16.6%: 23.6% (28) · cell < 30 ship-min data: 6.1% (55)
+- Main finding: 458 of 765 injections (60%) start in cells with < MinCellData ship-minutes in the fit-set model → those silences
+  are mostly never judged. The reception model is data-starved (99 feed minutes; live model has ~2× the data, same problem)
+- On this data the naive rule detects far more at equal measured false alarms; the model's false-alarm advantage (notes above:
+  −74…−89% at matched sensitivity) can't show here because 120 control ship-hours can't measure rates < 2.5/100 h
+- Next: rerun with aisdk-2026-11-18 + Nov 18 data/raw-server recordings (longer overlap); refit reception on more feed hours
+  before trusting α-based detection rates

@@ -18,6 +18,18 @@ type Stats struct {
 // ReadFile streams one JSONL recording, calling fn for every valid position.
 // It uses the same translator and validation as the live feed.
 func ReadFile(path string, fn func(ais.Position)) (Stats, error) {
+	return ReadAll(path, func(p ais.Position, valid bool) {
+		if valid {
+			fn(p)
+		}
+	})
+}
+
+// ReadAll is like ReadFile but also passes position reports that fail
+// validation (valid = false). The live feed marks itself alive on every
+// position report before validating, so this lets replays do the same.
+// Stats.Positions counts valid ones only, as in ReadFile.
+func ReadAll(path string, fn func(p ais.Position, valid bool)) (Stats, error) {
 	var st Stats
 	f, err := os.Open(path)
 	if err != nil {
@@ -36,12 +48,17 @@ func ReadFile(path string, fn func(ais.Position)) (Stats, error) {
 			continue
 		}
 		p, ok := env.ToPosition()
-		if !ok || p.Validate() != "" {
-			st.Skipped++ // confirmation messages, junk
+		if !ok {
+			st.Skipped++ // confirmation messages, ID cards
+			continue
+		}
+		if p.Validate() != "" {
+			st.Skipped++ // junk
+			fn(p, false)
 			continue
 		}
 		st.Positions++
-		fn(p)
+		fn(p, true)
 	}
 	if err := sc.Err(); err != nil {
 		return st, fmt.Errorf("%s: %w", path, err)

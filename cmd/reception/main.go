@@ -1,10 +1,7 @@
 package main
 
 import (
-	"encoding/binary"
 	"fmt"
-	"hash/fnv"
-	"io"
 	"log"
 	"math"
 	"os"
@@ -13,8 +10,8 @@ import (
 	h3 "github.com/uber/h3-go/v4"
 
 	"github.com/gulsherassad/darkwater/internal/ais"
-	"github.com/gulsherassad/darkwater/internal/dma"
 	"github.com/gulsherassad/darkwater/internal/grid"
+	"github.com/gulsherassad/darkwater/internal/presence"
 	"github.com/gulsherassad/darkwater/internal/reception"
 	"github.com/gulsherassad/darkwater/internal/replay"
 )
@@ -22,36 +19,18 @@ import (
 const (
 	priorStrength = 20.0
 	minCellData   = 30 // ship-minutes before a cell counts in the spread stats
-	maxInterpMin  = 15 // fill DMA gaps up to this long (ship was obviously still there)
+	maxInterpMin  = presence.MaxInterpMin
 	outPath       = "data/grid/reception-res6.csv"
 )
 
 var naiveMinutes = []int{5, 10, 15, 20, 30}
 var alphas = []float64{0.05, 0.01, 0.001}
 
-type key struct {
-	mmsi   int64
-	minute int64
-}
-
-type fix struct {
-	minute   int64
-	lat, lon float64
-}
+type key = presence.Key
 
 type gap struct {
 	minutes int
 	logP    float64
-}
-
-// inFitSet splits ships into two random halves. MMSIs aren't random
-// (big ships often end in zeros), so we hash them first.
-func inFitSet(mmsi int64) bool {
-	h := fnv.New32a()
-	var b [8]byte
-	binary.LittleEndian.PutUint64(b[:], uint64(mmsi))
-	h.Write(b[:])
-	return h.Sum32()%2 == 0
 }
 
 func percentile(xs []float64, p float64) float64 {
@@ -85,7 +64,7 @@ func main() {
 				return
 			}
 			m := p.Time.Unix() / 60
-			heard[key{p.MMSI, m}] = true
+			heard[key{MMSI: p.MMSI, Minute: m}] = true
 			alive[m] = true
 			firstAlive = min(firstAlive, m)
 			lastAlive = max(lastAlive, m)
@@ -96,36 +75,9 @@ func main() {
 	}
 
 	// 2) DMA: one fix per ship per minute, around the feed's alive period
-	f, err := os.Open(os.Args[1])
+	fixes, err := presence.LoadDMA(os.Args[1], firstAlive-maxInterpMin, lastAlive+maxInterpMin)
 	if err != nil {
 		log.Fatal(err)
-	}
-	defer f.Close()
-	rd, err := dma.NewReader(f)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fixes := map[int64][]fix{}
-	for {
-		p, reason, err := rd.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			log.Fatal(err)
-		}
-		if reason != "" || p.Validate() != "" || !grid.InDenmark(p) {
-			continue
-		}
-		m := p.Time.Unix() / 60
-		if m < firstAlive-maxInterpMin || m > lastAlive+maxInterpMin {
-			continue // far from any minute we can use
-		}
-		fs := fixes[p.MMSI]
-		if n := len(fs); n > 0 && fs[n-1].minute >= m {
-			continue // already have a fix for this minute
-		}
-		fixes[p.MMSI] = append(fs, fix{m, p.Lat, p.Lon})
 	}
 
 	// 3) Presence: DMA's own fixes, plus interpolated minutes inside short DMA gaps
@@ -135,30 +87,16 @@ func main() {
 		if !alive[m] {
 			return // feed wasn't recording: silence here says nothing
 		}
-		present[key{mmsi, m}] = grid.CellOf(ais.Position{Lat: lat, Lon: lon})
+		present[key{MMSI: mmsi, Minute: m}] = grid.CellOf(ais.Position{Lat: lat, Lon: lon})
 		if isFix {
 			observed++
 		} else {
 			interpolated++
 		}
 	}
-	for mmsi, fs := range fixes {
-		for i, a := range fs {
-			add(mmsi, a.minute, a.lat, a.lon, true)
-			if i+1 == len(fs) {
-				break
-			}
-			b := fs[i+1]
-			span := b.minute - a.minute
-			if span <= 1 || span > maxInterpMin {
-				continue // consecutive minutes, or a gap too long to trust
-			}
-			for m := a.minute + 1; m < b.minute; m++ {
-				t := float64(m-a.minute) / float64(span)
-				add(mmsi, m, a.lat+t*(b.lat-a.lat), a.lon+t*(b.lon-a.lon), false)
-			}
-		}
-	}
+	presence.Walk(fixes, func(mmsi int64, f presence.Fix, observed bool) {
+		add(mmsi, f.Minute, f.Lat, f.Lon, observed)
+	})
 
 	// 4) Fit on one random half of ships; keep counts for all ships for the saved model
 	fitCounts := map[h3.Cell]reception.Counts{}
@@ -175,14 +113,14 @@ func main() {
 		a.Heard += h
 		allCounts[c] = a
 
-		if inFitSet(k.mmsi) {
+		if presence.InFitSet(k.MMSI) {
 			fc := fitCounts[c]
 			fc.Present++
 			fc.Heard += h
 			fitCounts[c] = fc
 			fitMinutes++
 		} else {
-			evalShips[k.mmsi] = append(evalShips[k.mmsi], k.minute)
+			evalShips[k.MMSI] = append(evalShips[k.MMSI], k.Minute)
 		}
 	}
 	model := reception.Fit(fitCounts, priorStrength)
@@ -201,7 +139,7 @@ func main() {
 			if prev >= 0 && m != prev+1 {
 				afterHeard, silent = false, nil // lost the ship: can't judge this stretch
 			}
-			k := key{mmsi, m}
+			k := key{MMSI: mmsi, Minute: m}
 			if heard[k] {
 				if afterHeard && len(silent) > 0 {
 					gaps = append(gaps, gap{len(silent), model.SilenceLogProb(silent)})
