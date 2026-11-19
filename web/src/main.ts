@@ -3,11 +3,12 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import "./style.css";
 
-import type { CoverageCell, Ship, Trip, WsMessage } from "./types";
-import { buildLayers, isMoving, TRAIL_SECONDS } from "./layers";
+import type { Alert, CoverageCell, Ship, Trip, WsMessage } from "./types";
+import { buildLayers, isMoving, levelColor, TRAIL_SECONDS } from "./layers";
 
 const hud = document.getElementById("hud")!;
 const panel = document.getElementById("panel")!;
+const alertsBox = document.getElementById("alerts")!;
 const toggle = document.getElementById("toggle-coverage") as HTMLButtonElement;
 const legend = document.getElementById("legend")!;
 
@@ -19,6 +20,9 @@ const toT = (iso: string) => Date.parse(iso) / 1000 - BASE;
 // ---- State ----
 const ships = new Map<number, Ship>(); // MMSI -> latest report (in view)
 const history = new Map<number, Trip>(); // MMSI -> recent track
+const alerts = new Map<number, Alert>(); // MMSI -> current alert
+let alertList: Alert[] = []; // same alerts, most suspicious first
+let alertsVersion = 0;
 let selected: number | null = null;
 let socket: WebSocket | null = null;
 let bytesThisSecond = 0;
@@ -75,12 +79,16 @@ const overlay = new MapboxOverlay({
       const c = object as CoverageCell;
       return `Cell ${c.cell}\nDMA: ${c.dmaShips} ships · ${c.dmaMsgs} msgs\nFeed: ${c.feedShips} ships · ${c.feedMsgs} msgs`;
     }
+    if ("projLat" in object) {
+      const a = object as Alert;
+      return `${a.name || "Unknown"} — ${a.level}\nsilent ${a.silentMinutes} min · ${oneIn(a.chance)}\nprobable position now`;
+    }
     return `${(object as Ship).name || "Unknown"} (click for details)`;
   },
   onClick: (info) => {
-    // Clicking a ship selects it; clicking anything else clears the selection
+    // Clicking a ship or alert ring selects it; clicking anything else clears the selection
     const o = info.object;
-    selected = o && "mmsi" in o ? (o as Ship).mmsi : null;
+    selected = o && "mmsi" in o ? (o as Ship | Alert).mmsi : null;
     updatePanel();
   },
 });
@@ -134,6 +142,9 @@ function frame() {
       moving,
       stationary,
       trips,
+      alerts,
+      alertList,
+      alertsVersion,
       currentTime: nowT(),
       selected: selected !== null ? ships.get(selected) ?? null : null,
     }),
@@ -142,14 +153,58 @@ function frame() {
 }
 requestAnimationFrame(frame);
 
-// ---- HUD: ships in view and data rate ----
+// ---- HUD: ships in view, flagged ships, data rate ----
 setInterval(() => {
   if (socket && socket.readyState === WebSocket.OPEN) {
     const kbps = (bytesThisSecond / 1024).toFixed(1);
-    hud.textContent = `${ships.size} in view · ${moving.length} moving · ${kbps} KB/s`;
+    hud.textContent = `${ships.size} in view · ${moving.length} moving · ${alerts.size} flagged · ${kbps} KB/s`;
   }
   bytesThisSecond = 0;
 }, 1000);
+
+// ---- Helpers ----
+// Ship data comes from open radio: escape it before putting it in HTML
+function esc(v: unknown): string {
+  return String(v).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!
+  );
+}
+
+const fmt = (v: number, unit: string) => (v < 0 ? "unknown" : `${v}${unit}`);
+const oneIn = (chance: number) => `1 in ${Math.round(1 / Math.max(chance, 1e-12)).toLocaleString()}`;
+const rgb = (c: [number, number, number]) => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+
+// ---- Alerts list ----
+function renderAlerts() {
+  if (alertList.length === 0) {
+    alertsBox.hidden = true;
+    return;
+  }
+  alertsBox.hidden = false;
+  alertsBox.innerHTML =
+    `<h3>Flagged ships (${alertList.length})</h3><ul>` +
+    alertList
+      .map(
+        (a) => `
+      <li data-mmsi="${a.mmsi}">
+        <span class="dot" style="background:${rgb(levelColor(a.level))}"></span>
+        <strong>${esc(a.name || "Unknown")}</strong>
+        <small>${esc(a.level)} · silent ${a.silentMinutes} min · ${esc(oneIn(a.chance))}</small>
+      </li>`
+      )
+      .join("") +
+    `</ul>`;
+}
+
+alertsBox.addEventListener("click", (e) => {
+  const li = (e.target as HTMLElement).closest("li");
+  if (!li) return;
+  const a = alerts.get(Number(li.dataset.mmsi));
+  if (!a) return;
+  selected = a.mmsi;
+  map.flyTo({ center: [a.projLon, a.projLat], zoom: 9 });
+  updatePanel();
+});
 
 // ---- Details panel ----
 const NAV_STATUS: Record<number, string> = {
@@ -165,35 +220,40 @@ const NAV_STATUS: Record<number, string> = {
   15: "Not defined",
 };
 
-// Ship data comes from open radio: escape it before putting it in HTML
-function esc(v: unknown): string {
-  return String(v).replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!
-  );
-}
-
-const fmt = (v: number, unit: string) => (v < 0 ? "unknown" : `${v}${unit}`);
-
 function updatePanel() {
   const s = selected !== null ? ships.get(selected) : undefined;
-  if (!s) {
+  const a = selected !== null ? alerts.get(selected) : undefined;
+  if (!s && !a) {
     panel.hidden = true;
     return;
   }
-  const ago = Math.max(0, Math.round((Date.now() - Date.parse(s.time)) / 1000));
-  panel.hidden = false;
-  panel.innerHTML = `
-    <button id="close" aria-label="Close">×</button>
-    <h2>${esc(s.name || "Unknown")}</h2>
-    <dl>
+  const name = s?.name || a?.name || "Unknown";
+  let rows = "";
+  if (a) {
+    rows += `
+      <dt>Flag</dt><dd style="color:${rgb(levelColor(a.level))}">${esc(a.level.toUpperCase())}</dd>
+      <dt>Silent</dt><dd>${esc(a.silentMinutes)} min (${esc(a.judgedMinutes)} in known coverage)</dd>
+      <dt>Chance</dt><dd>${esc(oneIn(a.chance))} that bad reception explains it</dd>`;
+  }
+  if (s) {
+    const ago = Math.max(0, Math.round((Date.now() - Date.parse(s.time)) / 1000));
+    rows += `
       <dt>MMSI</dt><dd>${esc(s.mmsi)}</dd>
       <dt>Speed</dt><dd>${esc(fmt(s.speedKn, " kn"))}</dd>
       <dt>Course</dt><dd>${esc(fmt(s.courseDeg, "°"))}</dd>
       <dt>Heading</dt><dd>${esc(fmt(s.heading, "°"))}</dd>
       <dt>Status</dt><dd>${esc(NAV_STATUS[s.navStatus] ?? s.navStatus)} <small>(self-reported)</small></dd>
       <dt>Position</dt><dd>${esc(s.lat.toFixed(4))}, ${esc(s.lon.toFixed(4))}</dd>
-      <dt>Last report</dt><dd>${esc(ago)}s ago</dd>
-    </dl>`;
+      <dt>Last report</dt><dd>${esc(ago)}s ago</dd>`;
+  } else if (a) {
+    rows += `<dt>MMSI</dt><dd>${esc(a.mmsi)}</dd>
+      <dt>Last seen</dt><dd>${esc(a.lastLat.toFixed(4))}, ${esc(a.lastLon.toFixed(4))}</dd>`;
+  }
+  panel.hidden = false;
+  panel.innerHTML = `
+    <button id="close" aria-label="Close">×</button>
+    <h2>${esc(name)}</h2>
+    <dl>${rows}</dl>`;
 }
 
 panel.addEventListener("click", (e) => {
@@ -215,10 +275,20 @@ function connect() {
     bytesThisSecond += event.data.length;
     const msg: WsMessage = JSON.parse(event.data);
 
+    if (msg.type === "alerts") {
+      alerts.clear();
+      alertList = msg.alerts ?? [];
+      for (const a of alertList) alerts.set(a.mmsi, a);
+      alertsVersion++; // tells deck.gl to recompute ship colours
+      renderAlerts();
+      updatePanel();
+      return;
+    }
+
     if (msg.type === "snapshot") {
       ships.clear();
     }
-    for (const s of msg.ships) {
+    for (const s of msg.ships ?? []) {
       ships.set(s.mmsi, s);
       addToHistory(s);
     }

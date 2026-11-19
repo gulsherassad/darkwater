@@ -41,6 +41,14 @@ func (s *Store) Update(p ais.Position) (time.Duration, bool) {
 	return p.Time.Sub(old.Time), true
 }
 
+// Get returns one ship's latest position.
+func (s *Store) Get(mmsi int64) (ais.Position, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	p, ok := s.ships[mmsi]
+	return p, ok
+}
+
 // Snapshot returns a copy of every ship's latest position.
 func (s *Store) Snapshot() []ais.Position {
 	s.mu.RLock()

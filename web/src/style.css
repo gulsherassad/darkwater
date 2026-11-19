@@ -10,6 +10,11 @@ html, body {
   inset: 0;
 }
 
+/* Panels sit above the map canvas */
+#hud, #alerts, #panel, #controls {
+  z-index: 10;
+}
+
 #hud {
   position: absolute;
   top: 12px;
@@ -19,6 +24,57 @@ html, body {
   background: rgba(11, 15, 20, 0.8);
   color: #cfe3f5;
   font-size: 13px;
+}
+
+#alerts {
+  position: absolute;
+  top: 48px;
+  left: 12px;
+  width: 280px;
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(11, 15, 20, 0.92);
+  color: #cfe3f5;
+  font-size: 13px;
+}
+
+#alerts h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #7f93a8;
+  font-weight: 600;
+}
+
+#alerts ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+#alerts li {
+  padding: 6px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+#alerts li:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+#alerts small {
+  display: block;
+  margin-left: 16px;
+  color: #7f93a8;
+}
+
+.dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 7px;
+  border-radius: 50%;
 }
 
 #panel {
@@ -34,7 +90,8 @@ html, body {
 }
 
 #panel[hidden],
-#legend[hidden] {
+#legend[hidden],
+#alerts[hidden] {
   display: none;
 }
 

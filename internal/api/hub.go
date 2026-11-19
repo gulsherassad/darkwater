@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/gulsherassad/darkwater/internal/ais"
+	"github.com/gulsherassad/darkwater/internal/detect"
 	"github.com/gulsherassad/darkwater/internal/tracker"
 )
 
@@ -26,8 +27,9 @@ var upgrader = websocket.Upgrader{}
 
 // wsMessage is what the browser receives.
 type wsMessage struct {
-	Type  string     `json:"type"` // "snapshot" or "update"
-	Ships []shipJSON `json:"ships"`
+	Type   string         `json:"type"` // "snapshot", "update" or "alerts"
+	Ships  []shipJSON     `json:"ships,omitempty"`
+	Alerts []detect.Alert `json:"alerts,omitempty"`
 }
 
 // viewportMsg is what the browser sends when its map view changes.
@@ -80,10 +82,11 @@ type client struct {
 	view atomic.Pointer[bbox] // written by readLoop, read by broadcast
 }
 
-// Hub tracks connected browsers and sends ship changes to them.
+// Hub tracks connected browsers and sends ship changes and alerts to them.
 type Hub struct {
-	mu      sync.Mutex
-	clients map[*client]struct{}
+	mu         sync.Mutex
+	clients    map[*client]struct{}
+	lastAlerts []byte // latest alerts message, sent to newly connected browsers
 }
 
 func NewHub() *Hub {
@@ -144,6 +147,23 @@ func (h *Hub) broadcast(changed []ais.Position) {
 	}
 }
 
+// BroadcastAlerts sends the full alert list to every browser.
+// Alerts aren't filtered by viewport: there are few, and you want to know
+// about a flagged ship even if it's off-screen.
+func (h *Hub) BroadcastAlerts(alerts []detect.Alert) {
+	msg, err := json.Marshal(wsMessage{Type: "alerts", Alerts: alerts})
+	if err != nil {
+		log.Println("marshal alerts: ", err)
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.lastAlerts = msg
+	for c := range h.clients {
+		h.deliverLocked(c, msg)
+	}
+}
+
 // Run sends changes once per second until ctx is cancelled.
 func (h *Hub) Run(ctx context.Context, store *tracker.Store) {
 	ticker := time.NewTicker(broadcastEvery)
@@ -160,8 +180,8 @@ func (h *Hub) Run(ctx context.Context, store *tracker.Store) {
 	}
 }
 
-// ServeWS upgrades an HTTP request to a WebSocket, sends a snapshot,
-// then keeps the browser subscribed to updates for its view.
+// ServeWS upgrades an HTTP request to a WebSocket, sends a snapshot
+// and the current alerts, then keeps the browser subscribed.
 func (h *Hub) ServeWS(store *tracker.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -176,6 +196,11 @@ func (h *Hub) ServeWS(store *tracker.Store) http.HandlerFunc {
 		if snap, err := marshalMsg("snapshot", store.Snapshot()); err == nil {
 			c.send <- snap
 		}
+		h.mu.Lock()
+		if h.lastAlerts != nil {
+			c.send <- h.lastAlerts // so a new tab sees current alerts right away
+		}
+		h.mu.Unlock()
 		h.add(c)
 
 		go writeLoop(conn, c)

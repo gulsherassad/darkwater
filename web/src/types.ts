@@ -11,9 +11,27 @@ export type Ship = {
   navStatus: number;
 };
 
+// Same shape as detect.Alert in internal/detect/monitor.go
+export type Alert = {
+  mmsi: number;
+  name: string;
+  level: "watch" | "alert";
+  silentMinutes: number;
+  judgedMinutes: number;
+  chance: number;
+  lastSeen: string;
+  lastLat: number;
+  lastLon: number;
+  speedKn: number;
+  courseDeg: number;
+  projLat: number;
+  projLon: number;
+};
+
 export type WsMessage = {
-  type: "snapshot" | "update";
-  ships: Ship[];
+  type: "snapshot" | "update" | "alerts";
+  ships?: Ship[];
+  alerts?: Alert[];
 };
 
 // One ship's recent track, for drawing trails

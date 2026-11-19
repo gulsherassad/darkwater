@@ -29,3 +29,36 @@ func TestMonitorLevels(t *testing.T) {
 		t.Fatalf("2 min: want no alerts, got %+v", alerts)
 	}
 }
+
+func TestMonitorEvents(t *testing.T) {
+	store := tracker.New()
+	store.Update(ship)
+	mo := NewMonitor(modelWith(500, 1000), store, nil)
+
+	// Silent 8 min → opens as watch
+	now := start.Add(8 * time.Minute)
+	alerts, _ := mo.Scan(now)
+	if ev := mo.Diff(now, alerts); len(ev) != 1 || ev[0].Kind != EventOpen {
+		t.Fatalf("want 1 open event, got %+v", ev)
+	}
+
+	// Silent 30 min → escalates to alert
+	now = start.Add(30 * time.Minute)
+	alerts, _ = mo.Scan(now)
+	if ev := mo.Diff(now, alerts); len(ev) != 1 || ev[0].Kind != EventEscalate {
+		t.Fatalf("want 1 escalate event, got %+v", ev)
+	}
+
+	// Heard again at 31 min, exactly where dead reckoning expected it
+	back := ship
+	back.Time = start.Add(31 * time.Minute)
+	back.Lat, back.Lon = Project(ship, 31)
+	store.Update(back)
+
+	now = start.Add(32 * time.Minute)
+	alerts, _ = mo.Scan(now)
+	ev := mo.Diff(now, alerts)
+	if len(ev) != 1 || ev[0].Kind != EventReappeared || ev[0].MissKm > 0.01 {
+		t.Fatalf("want 1 reappeared event with ~0 km miss, got %+v", ev)
+	}
+}
