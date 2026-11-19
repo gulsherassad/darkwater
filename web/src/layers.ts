@@ -1,6 +1,6 @@
 import { ScatterplotLayer, IconLayer, LineLayer } from "@deck.gl/layers";
 import { TripsLayer, H3HexagonLayer } from "@deck.gl/geo-layers";
-import type { Alert, CoverageCell, Ship, Trip } from "./types";
+import type { Alert, CoverageCell, EncounterEvent, Ship, SpoofEvent, Trip } from "./types";
 
 export const TRAIL_SECONDS = 30 * 60; // trails show the last 30 minutes
 
@@ -9,6 +9,8 @@ const BLUE: RGB = [80, 200, 255];
 const GREY: RGB = [120, 130, 145];
 export const AMBER: RGB = [255, 180, 60]; // watch
 export const RED: RGB = [255, 80, 80]; // alert
+export const PURPLE: RGB = [170, 80, 255]; // spoofing (teleports)
+export const CYAN: RGB = [0, 220, 230]; // encounters
 
 // A simple arrow pointing up (north). White, so deck.gl can recolour it.
 const ARROW_URL =
@@ -54,12 +56,15 @@ type LayerInput = {
   alerts: Map<number, Alert>;
   alertList: Alert[];
   alertsVersion: number; // bumps whenever alerts change, so colours get recomputed
+  teleports: SpoofEvent[]; // new array on every poll, so deck.gl redraws
+  openEncounters: EncounterEvent[]; // likewise
   currentTime: number;
   selected: Ship | null;
 };
 
 export function buildLayers(input: LayerInput) {
-  const { coverage, moving, stationary, trips, alerts, alertList, alertsVersion, currentTime, selected } = input;
+  const { coverage, moving, stationary, trips, alerts, alertList, alertsVersion, teleports, openEncounters, currentTime, selected } =
+    input;
   const colorFor = (s: Ship, base: RGB): RGB => {
     const a = alerts.get(s.mmsi);
     return a ? levelColor(a.level) : base;
@@ -103,6 +108,30 @@ export function buildLayers(input: LayerInput) {
       getColor: (a) => [...levelColor(a.level), 200],
       getWidth: 2,
       widthUnits: "pixels",
+    }),
+
+    // Spoofing: line from where the ship was to where it impossibly jumped
+    new LineLayer<SpoofEvent>({
+      id: "teleports",
+      data: teleports,
+      getSourcePosition: (e) => [e.fromLon, e.fromLat],
+      getTargetPosition: (e) => [e.toLon, e.toLat],
+      getColor: [...PURPLE, 220],
+      getWidth: 2,
+      widthUnits: "pixels",
+    }),
+
+    // Encounters still going on: ring around the meeting point
+    new ScatterplotLayer<EncounterEvent>({
+      id: "encounters",
+      data: openEncounters,
+      getPosition: (e) => [e.lon, e.lat],
+      getRadius: 400, // metres
+      radiusMinPixels: 8, // still visible when zoomed out
+      filled: false,
+      stroked: true,
+      getLineColor: CYAN,
+      lineWidthMinPixels: 2,
     }),
 
     // Stationary ships: small grey dots

@@ -31,7 +31,7 @@ html, body {
   top: 48px;
   left: 12px;
   width: 280px;
-  max-height: 40vh;
+  max-height: 60vh;
   overflow-y: auto;
   padding: 10px 12px;
   border-radius: 8px;
@@ -47,10 +47,23 @@ html, body {
   font-weight: 600;
 }
 
+#alerts ul + h3 {
+  margin-top: 12px;
+}
+
 #alerts ul {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+#alerts li.empty {
+  color: #7f93a8;
+  cursor: default;
+}
+
+#alerts li.empty:hover {
+  background: none;
 }
 
 #alerts li {
