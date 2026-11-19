@@ -126,3 +126,8 @@
   → dead reckoning accurate over short gaps; ferry leaving harbour (turning/accelerating) had largest miss
 - Double-ended ferries (DEUTSCHLAND): heading ≠ course by ~180° → projection must use course, never heading
 - Pattern spotted: nearby ships going silent together → likely receiver hiccup (future: correlated-silence suppression)
+
+## Spoofing scan (data/raw-server, Nov 2026)
+- 28,608 positions / 1,552 ships → 2 teleports (1 ship), 0 identity clashes
+- ALICE 244790715: 2 teleports at 2,509 kn = single bad fix out and back (GPS glitch)
+- Future: tell clash vs glitch apart by checking whether the far positions form their own consistent track
