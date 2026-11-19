@@ -118,3 +118,11 @@
 - Steady state: ~110–160 ships judged per 30 s scan; watch 0–2, alert 0–2 (brief), mostly 0 — consistent with multiple-testing expectations
 - Gap: monitor logs only counts → need per-ship alert event log to verify against DMA (Step 3)
 - Recorded ~3 h of Nov 18 UTC overlap → rerun reception model with aisdk-2026-11-18 (~Nov 21)
+
+## Live alerts UI + event log (test run, watch α=0.3)
+- Map: amber/red ships, line + ring at projected position, clickable alerts list, HUD count
+- Event log (data/alerts/*.jsonl): open / escalate / deescalate / reappeared / cleared, with missKm on reappearance
+- Test run: 4 ships flagged, all reappeared within ~6 min; projection miss 5 m, 37 m, 112 m, 866 m
+  → dead reckoning accurate over short gaps; ferry leaving harbour (turning/accelerating) had largest miss
+- Double-ended ferries (DEUTSCHLAND): heading ≠ course by ~180° → projection must use course, never heading
+- Pattern spotted: nearby ships going silent together → likely receiver hiccup (future: correlated-silence suppression)
