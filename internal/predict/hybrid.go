@@ -28,14 +28,28 @@ func usable(p Predictor, history []track.Point) bool {
 	return !ok || c.Usable(history)
 }
 
+// Which branch Pick took
+const (
+	PathShort    = "short"    // below SwitchSec
+	PathLong     = "long"     // dense model
+	PathSparse   = "sparse"   // sparse model
+	PathFallback = "fallback" // neither model could read the history: dead reckoning
+)
+
+// Pick returns the predictor the hybrid uses for this question, and which branch that is.
+func (h Hybrid) Pick(history []track.Point, horizonSec int64) (Predictor, string) {
+	switch {
+	case horizonSec < h.SwitchSec:
+		return h.Short, PathShort
+	case usable(h.Long, history):
+		return h.Long, PathLong
+	case usable(h.Sparse, history):
+		return h.Sparse, PathSparse
+	}
+	return DeadReckoning{}, PathFallback
+}
+
 func (h Hybrid) Predict(history []track.Point, horizonSec int64) (float64, float64) {
-	if horizonSec < h.SwitchSec {
-		return h.Short.Predict(history, horizonSec)
-	}
-	for _, p := range []Predictor{h.Long, h.Sparse} {
-		if usable(p, history) {
-			return p.Predict(history, horizonSec)
-		}
-	}
-	return DeadReckoning{}.Predict(history, horizonSec)
+	p, _ := h.Pick(history, horizonSec)
+	return p.Predict(history, horizonSec)
 }

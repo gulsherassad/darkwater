@@ -112,6 +112,15 @@ func main() {
 		errs[p.Name()] = map[int64][]float64{}
 	}
 
+	// Per-path breakdown: which branch the hybrid took, and DR vs sparse GRU
+	// on only the questions the sparse GRU answered
+	paths := map[int64]map[string]int{}
+	type pair struct{ dr, gru []float64 }
+	sparseOnly := map[int64]*pair{}
+	for _, h := range horizons {
+		paths[h], sparseOnly[h] = map[string]int{}, &pair{}
+	}
+
 	// The exam: identical questions for every predictor
 	questions := 0
 	for _, tr := range tracks {
@@ -139,6 +148,13 @@ func main() {
 				for _, p := range predictors {
 					lat, lon := p.Predict(history, truth.T-pt.T)
 					errs[p.Name()][h] = append(errs[p.Name()][h], geo.HaversineKm(lat, lon, truth.Lat, truth.Lon))
+				}
+				_, path := hybrid.Pick(history, truth.T-pt.T)
+				paths[h][path]++
+				if path == predict.PathSparse { // this question's errors were just appended last
+					dr, gru := errs["dead-reckoning"][h], errs[sparse.Name()][h]
+					sparseOnly[h].dr = append(sparseOnly[h].dr, dr[len(dr)-1])
+					sparseOnly[h].gru = append(sparseOnly[h].gru, gru[len(gru)-1])
 				}
 			}
 		}
@@ -176,4 +192,28 @@ func main() {
 		fmt.Println()
 	}
 	fmt.Printf("%d questions total\n", questions)
+
+	// Per-path breakdown of the hybrid
+	fmt.Printf("\nhybrid: share of questions per path\n")
+	fmt.Printf("%-8s %6s %12s %10s %11s %9s\n", "horizon", "n", "DR (<10min)", "dense GRU", "sparse GRU", "fallback")
+	for _, h := range horizons {
+		c := paths[h]
+		n := c[predict.PathShort] + c[predict.PathLong] + c[predict.PathSparse] + c[predict.PathFallback]
+		share := func(path string) float64 { return 100 * float64(c[path]) / float64(max(n, 1)) }
+		fmt.Printf("%-8s %6d %11.1f%% %9.1f%% %10.1f%% %8.1f%%\n", fmt.Sprintf("%d min", h/60), n,
+			share(predict.PathShort), share(predict.PathLong), share(predict.PathSparse), share(predict.PathFallback))
+	}
+	if sparse != nil {
+		fmt.Printf("\nonly questions answered by the sparse GRU\n")
+		fmt.Printf("%-8s %6s %18s %18s %10s\n", "horizon", "n", "DR p50 / p90", "GRU p50 / p90", "p90 vs DR")
+		for _, h := range horizons {
+			s := sparseOnly[h]
+			if len(s.gru) == 0 {
+				continue // e.g. 5 min: always dead reckoning
+			}
+			drP90, gruP90 := percentile(s.dr, 0.9), percentile(s.gru, 0.9)
+			fmt.Printf("%-8s %6d %6.2f / %5.2f km %6.2f / %5.2f km %+9.1f%%\n", fmt.Sprintf("%d min", h/60), len(s.gru),
+				percentile(s.dr, 0.5), drP90, percentile(s.gru, 0.5), gruP90, pct(gruP90, drP90))
+		}
+	}
 }

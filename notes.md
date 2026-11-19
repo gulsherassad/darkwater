@@ -150,3 +150,19 @@
   | 60 min | 2.15 / 13.29 km| 2.06 / 11.27 km| −15.2% |
 - 0 model errors; sparse falls back to DR on 3,272 direct calls (fewer than 6 fixes in 90 min)
 - Dense pipeline unchanged after refactor: Nov 9 eval reproduces −10.3 / −12.9 / −14.3% exactly
+- Hybrid path coverage (same run; trajeval now prints this):
+  | horizon | n | DR (<10 min) | dense GRU | sparse GRU | fallback (DR) |
+  |---|---|---|---|---|---|
+  | 5 min  | 5,351 | 100% | 0% | 0% | 0% |
+  | 15 min | 5,178 | 0% | 0% | 83.4% | 16.6% |
+  | 30 min | 4,899 | 0% | 0% | 83.6% | 16.4% |
+  | 60 min | 4,406 | 0% | 0% | 83.5% | 16.5% |
+- Only questions the sparse GRU answered (DR vs GRU on the same questions):
+  | horizon | n | DR p50 / p90 | GRU p50 / p90 | p90 change |
+  |---|---|---|---|---|
+  | 15 min | 4,317 | 0.20 / 1.76 km | 0.25 / 1.58 km | −9.9% |
+  | 30 min | 4,097 | 0.64 / 5.04 km | 0.69 / 4.41 km | −12.4% |
+  | 60 min | 3,678 | 2.14 / 13.19 km | 2.04 / 10.82 km | −18.0% |
+- Overall hybrid gains (−7.2 / −10.0 / −15.2%) are diluted by the ~16.5% fallback questions, which are also harder
+  (DR p90 on them: 2.29 / 5.75 / 14.31 km vs 1.76 / 5.04 / 13.19 km where the GRU runs)
+- Future work: K=4 or zero-padded sparse variant (new feature version + retrain) to cover the ~16.5% fallback questions

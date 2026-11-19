@@ -56,6 +56,15 @@ func TestHybridPicksModelByHistory(t *testing.T) {
 	if lat, _ := h.Predict(hist(7), 1800); lat != 2 {
 		t.Fatal("sparse history: Sparse")
 	}
+	for _, c := range []struct {
+		n    int
+		hz   int64
+		want string
+	}{{10, 300, PathShort}, {10, 1800, PathLong}, {7, 1800, PathSparse}, {3, 1800, PathFallback}} {
+		if _, got := h.Pick(hist(c.n), c.hz); got != c.want {
+			t.Fatalf("%d points, %d s: want path %s, got %s", c.n, c.hz, c.want, got)
+		}
+	}
 	// Too little for either model: dead reckoning (unknown speed here → last position)
 	short := []track.Point{{Lat: 55, Lon: 10, SpeedKn: -1, CourseDeg: -1}}
 	if lat, lon := h.Predict(short, 1800); lat != 55 || lon != 10 {
