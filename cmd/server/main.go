@@ -21,13 +21,16 @@ import (
 	"github.com/gulsherassad/darkwater/internal/reception"
 	"github.com/gulsherassad/darkwater/internal/recorder"
 	"github.com/gulsherassad/darkwater/internal/tracker"
+	"github.com/gulsherassad/darkwater/internal/vessels"
 )
 
 const (
 	receptionPath = "data/grid/reception-res6.csv"
 	coveragePath  = "data/grid/cells-res6.csv"
+	portsPath     = "data/grid/ports.csv"
 	eventLogDir   = "data/alerts"
 	scanEvery     = 30 * time.Second
+	encounterScan = time.Minute
 )
 
 // eventLog lets several goroutines write to one log file safely.
@@ -62,6 +65,7 @@ func main() {
 	defer stop()
 
 	store := tracker.New()
+	ships := vessels.New()
 	live := liveness.New(detect.MaxSilence + time.Hour)
 
 	rec, err := recorder.New(eventLogDir)
@@ -79,13 +83,14 @@ func main() {
 			e.Kind, e.Name, e.MMSI, e.Km, e.Seconds, e.ImpliedKn)
 	}
 
-	// 1) Receiver runs in the background, writing to the store
+	// 1) Receiver runs in the background, writing to the store and the ID-card registry
 	cfg := ingest.Config{
 		APIKey:     apiKey,
 		BBoxes:     ingest.Denmark,
 		RecordDir:  "data/raw-server",
 		Liveness:   live,
 		OnPosition: spoof.Observe,
+		OnStatic:   ships.Update,
 	}
 	ingestDone := make(chan error, 1)
 	go func() {
@@ -111,10 +116,46 @@ func main() {
 		log.Printf("detector on: scanning every %s (watch < %g, alert < %g)", scanEvery, *watchAlpha, *alertAlpha)
 	}
 
-	// 4) Web server runs in the foreground
+	// 4) Encounter detector: scans once a minute (needs the port mask, or ports flood it)
+	var enc *detect.EncounterDetector
+	if mask, err := detect.LoadPortMask(portsPath); err != nil {
+		log.Printf("encounters off: %v (run cmd/encscan to build the port mask)", err)
+	} else {
+		enc = detect.NewEncounterDetector()
+		enc.Masked = mask.Masked
+		enc.Info = ships.Get
+		enc.OnEvent = func(e detect.EncounterEvent) {
+			events.write(e, e.Time)
+			log.Printf("encounter: %-15s %s + %s  %.0f min  draught %.1f/%.1f m",
+				e.Kind, e.Name1, e.Name2, e.Minutes, e.Draught1, e.Draught2)
+		}
+		go func() {
+			t := time.NewTicker(encounterScan)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					enc.Scan(time.Now().UTC(), store.Snapshot())
+				}
+			}
+		}()
+		log.Printf("encounters on: scanning every %s", encounterScan)
+	}
+
+	// 5) Web server runs in the foreground
 	srv := &http.Server{
-		Addr:    ":8080",
-		Handler: api.NewRouter(store, hub, coveragePath, monitor, spoof),
+		Addr: ":8080",
+		Handler: api.NewRouter(api.Deps{
+			Store:        store,
+			Hub:          hub,
+			CoveragePath: coveragePath,
+			Monitor:      monitor,
+			Spoof:        spoof,
+			Encounters:   enc,
+			Vessels:      ships,
+		}),
 	}
 
 	// On Ctrl+C: stop accepting requests, give in-flight ones 5s to finish

@@ -12,6 +12,8 @@ import (
 	"github.com/gulsherassad/darkwater/internal/tracker"
 )
 
+const maskPath = "data/grid/ports.csv"
+
 func label(name string, mmsi int64) string {
 	if name == "" {
 		return fmt.Sprint(mmsi)
@@ -25,7 +27,7 @@ func main() {
 	}
 	files := os.Args[1:]
 
-	// Pass 1: learn where ships moor, so ports can be ignored
+	// Pass 1: learn where ships sit still (ports, anchorages), so those areas can be ignored
 	mask := detect.NewPortMask()
 	for _, path := range files {
 		if _, err := replay.ReadFile(path, func(p ais.Position) {
@@ -37,6 +39,9 @@ func main() {
 		}
 	}
 	ports := mask.Finish(3)
+	if err := mask.Save(maskPath); err != nil {
+		log.Fatal(err)
+	}
 
 	// Pass 2: replay, scanning once per minute of message time
 	store := tracker.New()
@@ -65,7 +70,7 @@ func main() {
 		}
 	}
 
-	fmt.Printf("%d port squares masked\n", ports)
+	fmt.Printf("%d port squares masked (saved to %s)\n", ports, maskPath)
 	fmt.Printf("%d scans, %.0f candidate ships per scan (slow, fresh, outside ports)\n\n",
 		scans, float64(candidates)/float64(max(scans, 1)))
 

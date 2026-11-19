@@ -3,11 +3,13 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gulsherassad/darkwater/internal/ais"
 	"github.com/gulsherassad/darkwater/internal/detect"
 	"github.com/gulsherassad/darkwater/internal/tracker"
+	"github.com/gulsherassad/darkwater/internal/vessels"
 )
 
 // shipJSON is what the frontend sees. It's separate from ais.Position
@@ -42,37 +44,84 @@ func toShipJSON(ps []ais.Position) []shipJSON {
 	return out
 }
 
-// NewRouter maps URLs to handler functions. monitor and spoof may be nil.
-func NewRouter(store *tracker.Store, hub *Hub, coveragePath string,
-	monitor *detect.Monitor, spoof *detect.SpoofDetector) http.Handler {
+// Deps is everything the API needs. Optional fields may be nil.
+type Deps struct {
+	Store        *tracker.Store
+	Hub          *Hub
+	CoveragePath string
+	Monitor      *detect.Monitor           // optional: dark-ship alerts
+	Spoof        *detect.SpoofDetector     // optional
+	Encounters   *detect.EncounterDetector // optional
+	Vessels      *vessels.Registry         // optional: ship ID cards
+}
+
+// NewRouter maps URLs to handler functions.
+func NewRouter(d Deps) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/ships", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, toShipJSON(store.Snapshot()))
+		writeJSON(w, toShipJSON(d.Store.Snapshot()))
 	})
 
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"status": "ok", "ships": store.Len(), "detector": monitor != nil})
+		known := 0
+		if d.Vessels != nil {
+			known = d.Vessels.Len()
+		}
+		writeJSON(w, map[string]any{
+			"status":     "ok",
+			"ships":      d.Store.Len(),
+			"idCards":    known,
+			"detector":   d.Monitor != nil,
+			"encounters": d.Encounters != nil,
+		})
 	})
 
-	mux.HandleFunc("GET /api/ws", hub.ServeWS(store))
+	mux.HandleFunc("GET /api/ws", d.Hub.ServeWS(d.Store))
 
-	mux.HandleFunc("GET /api/coverage", coverageHandler(coveragePath))
+	mux.HandleFunc("GET /api/coverage", coverageHandler(d.CoveragePath))
 
 	mux.HandleFunc("GET /api/alerts", func(w http.ResponseWriter, r *http.Request) {
-		if monitor == nil {
+		if d.Monitor == nil {
 			writeJSON(w, []detect.Alert{})
 			return
 		}
-		writeJSON(w, monitor.Current())
+		writeJSON(w, d.Monitor.Current())
 	})
 
 	mux.HandleFunc("GET /api/spoof", func(w http.ResponseWriter, r *http.Request) {
-		if spoof == nil {
+		if d.Spoof == nil {
 			writeJSON(w, []detect.SpoofEvent{})
 			return
 		}
-		writeJSON(w, spoof.Recent())
+		writeJSON(w, d.Spoof.Recent())
+	})
+
+	mux.HandleFunc("GET /api/encounters", func(w http.ResponseWriter, r *http.Request) {
+		if d.Encounters == nil {
+			writeJSON(w, []detect.EncounterEvent{})
+			return
+		}
+		writeJSON(w, d.Encounters.Recent())
+	})
+
+	// One ship's ID card, e.g. /api/vessels/219000001
+	mux.HandleFunc("GET /api/vessels/{mmsi}", func(w http.ResponseWriter, r *http.Request) {
+		mmsi, err := strconv.ParseInt(r.PathValue("mmsi"), 10, 64)
+		if err != nil {
+			http.Error(w, "bad mmsi", http.StatusBadRequest)
+			return
+		}
+		if d.Vessels == nil {
+			http.NotFound(w, r)
+			return
+		}
+		info, ok := d.Vessels.Get(mmsi)
+		if !ok {
+			http.NotFound(w, r) // no ID card received yet
+			return
+		}
+		writeJSON(w, info)
 	})
 
 	return mux

@@ -30,6 +30,7 @@ type Config struct {
 	RecordDir  string
 	Liveness   *liveness.Tracker  // optional: records which minutes the feed was alive
 	OnPosition func(ais.Position) // optional: called for every accepted position
+	OnStatic   func(ais.ShipInfo) // optional: called for every ship ID card
 }
 
 // Run ingests until ctx is cancelled, reconnecting whenever the stream drops.
@@ -74,7 +75,7 @@ func runOnce(ctx context.Context, cfg Config, store *tracker.Store, rec *recorde
 	sub := map[string]any{
 		"APIKey":             cfg.APIKey,
 		"BoundingBoxes":      cfg.BBoxes,
-		"FilterMessageTypes": []string{"PositionReport"},
+		"FilterMessageTypes": []string{"PositionReport", "ShipStaticData"},
 	}
 	if err := conn.WriteJSON(sub); err != nil {
 		return err
@@ -93,7 +94,7 @@ func runOnce(ctx context.Context, cfg Config, store *tracker.Store, rec *recorde
 	}()
 
 	rejected := map[string]int{}
-	windowMsgs := 0
+	windowMsgs, windowStatic := 0, 0
 	var windowGaps []time.Duration
 	lastReport := time.Now()
 
@@ -117,6 +118,13 @@ func runOnce(ctx context.Context, cfg Config, store *tracker.Store, rec *recorde
 		}
 		pos, ok := env.ToPosition()
 		if !ok {
+			// Not a position: maybe a ship ID card
+			if info, ok := ais.ParseStatic(msg, time.Now().UTC()); ok {
+				windowStatic++
+				if cfg.OnStatic != nil {
+					cfg.OnStatic(info)
+				}
+			}
 			continue
 		}
 		if cfg.Liveness != nil {
@@ -140,10 +148,10 @@ func runOnce(ctx context.Context, cfg Config, store *tracker.Store, rec *recorde
 
 		if time.Since(lastReport) >= reportEvery {
 			elapsed := time.Since(lastReport).Seconds()
-			log.Printf("ships=%d  rate=%.1f msg/s  median_gap=%s  rejected=%v",
-				store.Len(), float64(windowMsgs)/elapsed, median(windowGaps), rejected)
+			log.Printf("ships=%d  rate=%.1f msg/s  static=%d  median_gap=%s  rejected=%v",
+				store.Len(), float64(windowMsgs)/elapsed, windowStatic, median(windowGaps), rejected)
 			rec.Flush()
-			windowMsgs = 0
+			windowMsgs, windowStatic = 0, 0
 			windowGaps = windowGaps[:0]
 			lastReport = time.Now()
 		}

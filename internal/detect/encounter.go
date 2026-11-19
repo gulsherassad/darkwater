@@ -15,15 +15,19 @@ const (
 )
 
 type EncounterEvent struct {
-	Time    time.Time `json:"time"`
-	Kind    string    `json:"kind"`
-	MMSI1   int64     `json:"mmsi1"`
-	Name1   string    `json:"name1"`
-	MMSI2   int64     `json:"mmsi2"`
-	Name2   string    `json:"name2"`
-	Lat     float64   `json:"lat"`
-	Lon     float64   `json:"lon"`
-	Minutes float64   `json:"minutes"` // how long they've been together
+	Time     time.Time `json:"time"`
+	Kind     string    `json:"kind"`
+	MMSI1    int64     `json:"mmsi1"`
+	Name1    string    `json:"name1"`
+	Type1    int       `json:"type1,omitempty"`
+	Draught1 float64   `json:"draught1,omitempty"`
+	MMSI2    int64     `json:"mmsi2"`
+	Name2    string    `json:"name2"`
+	Type2    int       `json:"type2,omitempty"`
+	Draught2 float64   `json:"draught2,omitempty"`
+	Lat      float64   `json:"lat"`
+	Lon      float64   `json:"lon"`
+	Minutes  float64   `json:"minutes"` // how long they've been together
 }
 
 type pairKey struct{ a, b int64 } // a < b, so each pair has exactly one key
@@ -37,16 +41,18 @@ type pairState struct {
 
 // EncounterDetector finds pairs of slow ships staying close together.
 type EncounterDetector struct {
-	MaxKm       float64       // closer than this = "together"
-	MaxKn       float64       // both must be slower than this
-	MaxAge      time.Duration // ignore ships whose last position is older
-	MinDuration time.Duration // together this long = encounter
-	EndAfter    time.Duration // apart (or unseen) this long = encounter over
-	Masked      func(lat, lon float64) bool
+	MaxKm       float64                               // closer than this = "together"
+	MaxKn       float64                               // both must be slower than this
+	MaxAge      time.Duration                         // ignore ships whose last position is older
+	MinDuration time.Duration                         // together this long = encounter
+	EndAfter    time.Duration                         // apart (or unseen) this long = encounter over
+	Masked      func(lat, lon float64) bool           // optional: ports and anchorages
+	Info        func(mmsi int64) (ais.ShipInfo, bool) // optional: ship type and draught
 	OnEvent     func(EncounterEvent)
 
-	mu    sync.Mutex
-	pairs map[pairKey]*pairState
+	mu     sync.Mutex
+	pairs  map[pairKey]*pairState
+	recent []EncounterEvent
 }
 
 func NewEncounterDetector() *EncounterDetector {
@@ -58,7 +64,7 @@ func NewEncounterDetector() *EncounterDetector {
 }
 
 // Scan checks the latest position of every ship. Call it periodically.
-// Returns how many ships were candidates (slow, fresh, outside ports).
+// Returns how many ships were candidates (slow, fresh, outside ports, not service vessels).
 func (d *EncounterDetector) Scan(now time.Time, ships []ais.Position) int {
 	d.mu.Lock()
 	n, events := d.scanLocked(now, ships)
@@ -72,8 +78,33 @@ func (d *EncounterDetector) Scan(now time.Time, ships []ais.Position) int {
 	return n
 }
 
+// Recent returns the latest encounter events, oldest first.
+func (d *EncounterDetector) Recent() []EncounterEvent {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]EncounterEvent{}, d.recent...)
+}
+
+func (d *EncounterDetector) info(mmsi int64) (ais.ShipInfo, bool) {
+	if d.Info == nil {
+		return ais.ShipInfo{}, false
+	}
+	return d.Info(mmsi)
+}
+
+// pairAllowed drops pairs that can't be a cargo transfer, when types are known.
+// Unknown type = keep: a missing ID card isn't proof of innocence.
+func (d *EncounterDetector) pairAllowed(a, b int64) bool {
+	ia, okA := d.info(a)
+	ib, okB := d.info(b)
+	if okA && okB && ia.Type != 0 && ib.Type != 0 && !ia.CarriesCargo() && !ib.CarriesCargo() {
+		return false // e.g. two fishing boats
+	}
+	return true
+}
+
 func (d *EncounterDetector) scanLocked(now time.Time, ships []ais.Position) (int, []EncounterEvent) {
-	// 1) Keep only slow, recently-seen ships outside ports
+	// 1) Keep only slow, recently-seen ships outside ports that aren't service vessels
 	var c []ais.Position
 	for _, p := range ships {
 		if p.SpeedKn < 0 || p.SpeedKn > d.MaxKn || p.NavStatus == navMoored {
@@ -84,6 +115,9 @@ func (d *EncounterDetector) scanLocked(now time.Time, ships []ais.Position) (int
 		}
 		if d.Masked != nil && d.Masked(p.Lat, p.Lon) {
 			continue
+		}
+		if info, ok := d.info(p.MMSI); ok && info.IsService() {
+			continue // pilot, rescue, tug...
 		}
 		c = append(c, p)
 	}
@@ -105,6 +139,9 @@ func (d *EncounterDetector) scanLocked(now time.Time, ships []ais.Position) (int
 			if a.MMSI > b.MMSI {
 				a, b = b, a
 			}
+			if !d.pairAllowed(a.MMSI, b.MMSI) {
+				continue
+			}
 			k := pairKey{a.MMSI, b.MMSI}
 			s := d.pairs[k]
 			if s == nil {
@@ -117,7 +154,7 @@ func (d *EncounterDetector) scanLocked(now time.Time, ships []ais.Position) (int
 
 			if !s.open && now.Sub(s.first) >= d.MinDuration {
 				s.open = true
-				events = append(events, s.event(EncounterStart, now, k))
+				events = append(events, d.event(EncounterStart, now, k, s))
 			}
 		}
 	}
@@ -128,18 +165,32 @@ func (d *EncounterDetector) scanLocked(now time.Time, ships []ais.Position) (int
 			continue
 		}
 		if s.open {
-			events = append(events, s.event(EncounterEnd, s.last, k))
+			events = append(events, d.event(EncounterEnd, s.last, k, s))
 		}
 		delete(d.pairs, k)
+	}
+
+	d.recent = append(d.recent, events...)
+	if len(d.recent) > recentMax {
+		d.recent = d.recent[len(d.recent)-recentMax:]
 	}
 	return len(c), events
 }
 
-func (s *pairState) event(kind string, t time.Time, k pairKey) EncounterEvent {
-	return EncounterEvent{
+// event builds an encounter event, attaching type and draught when known,
+// so start vs end draught shows whether a tanker loaded cargo.
+func (d *EncounterDetector) event(kind string, t time.Time, k pairKey, s *pairState) EncounterEvent {
+	e := EncounterEvent{
 		Time: t, Kind: kind,
 		MMSI1: k.a, Name1: s.name1, MMSI2: k.b, Name2: s.name2,
 		Lat: s.lat, Lon: s.lon,
 		Minutes: s.last.Sub(s.first).Minutes(),
 	}
+	if i, ok := d.info(k.a); ok {
+		e.Type1, e.Draught1 = i.Type, i.DraughtM
+	}
+	if i, ok := d.info(k.b); ok {
+		e.Type2, e.Draught2 = i.Type, i.DraughtM
+	}
+	return e
 }
