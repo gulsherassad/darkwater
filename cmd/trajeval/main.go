@@ -32,19 +32,47 @@ func percentile(xs []float64, p float64) float64 {
 }
 
 func main() {
-	modelPath := flag.String("model", "models/traj_gru.onnx", "trained ONNX model")
+	modelPath := flag.String("model", "models/traj_gru.onnx", "dense GRU (\"\" to skip)")
+	sparsePath := flag.String("sparse-model", "", "sparse GRU, e.g. models/traj_gru_sparse.onnx (optional)")
 	libPath := flag.String("ortlib", "/opt/homebrew/lib/libonnxruntime.dylib", "ONNX Runtime library")
+	thinPath := flag.String("thin", "", "live gap list (data/ml/live-gaps.csv): ask questions on thinned tracks")
+	seed := flag.Int64("seed", 1, "thinning seed")
 	flag.Parse()
 	if flag.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: go run ./cmd/trajeval [-model path] [-ortlib path] <dma.csv>")
+		fmt.Fprintln(os.Stderr, "usage: go run ./cmd/trajeval [-model path] [-sparse-model path] [-thin gaps.csv -seed N] [-ortlib path] <dma.csv>")
 		os.Exit(2)
 	}
 
-	gru, err := model.LoadGRU(*modelPath, *libPath)
-	if err != nil {
-		log.Fatal(err)
+	// Models: each picks its feature recipe from its input width
+	var gru, sparse *model.GRU
+	var gruModels []*model.GRU
+	for _, m := range []struct {
+		path string
+		dst  **model.GRU
+	}{{*modelPath, &gru}, {*sparsePath, &sparse}} {
+		if m.path == "" {
+			continue
+		}
+		g, err := model.LoadGRU(m.path, *libPath)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer g.Close()
+		fmt.Printf("loaded %s (%s features)\n", m.path, g.Spec.Version)
+		*m.dst = g
+		gruModels = append(gruModels, g)
 	}
-	defer gru.Close()
+	if gru != nil && sparse != nil && gru.Spec.Version == sparse.Spec.Version {
+		log.Fatal("-model and -sparse-model use the same feature recipe")
+	}
+
+	var gaps []int64
+	if *thinPath != "" {
+		var err error
+		if gaps, err = track.LoadGaps(*thinPath); err != nil {
+			log.Fatal(err)
+		}
+	}
 
 	tracks, err := track.LoadDMA(flag.Arg(0))
 	if err != nil {
@@ -61,13 +89,24 @@ func main() {
 	}
 	testStart := minT - minT%86400 + testAfterHours*3600
 	fmt.Printf("tracks: %d ships, %d points (1/min)\n", len(tracks), points)
-
-	predictors := []predict.Predictor{
-		predict.StayPut{},
-		predict.DeadReckoning{},
-		gru,
-		predict.Hybrid{Short: predict.DeadReckoning{}, Long: gru, SwitchSec: 600},
+	if gaps != nil {
+		fmt.Printf("histories thinned to live-feed gaps (%s, %d gaps, seed %d); truth from the full track\n",
+			*thinPath, len(gaps), *seed)
 	}
+
+	predictors := []predict.Predictor{predict.StayPut{}, predict.DeadReckoning{}}
+	hybrid := predict.Hybrid{Short: predict.DeadReckoning{}, SwitchSec: 600}
+	// Assign only non-nil models: a nil *GRU in an interface isn't a nil interface
+	if gru != nil {
+		predictors = append(predictors, gru)
+		hybrid.Long = gru
+	}
+	if sparse != nil {
+		predictors = append(predictors, sparse)
+		hybrid.Sparse = sparse
+	}
+	predictors = append(predictors, hybrid)
+
 	errs := map[string]map[int64][]float64{}
 	for _, p := range predictors {
 		errs[p.Name()] = map[int64][]float64{}
@@ -76,14 +115,18 @@ func main() {
 	// The exam: identical questions for every predictor
 	questions := 0
 	for _, tr := range tracks {
-		pts := tr.Points
+		pts := tr.Points // full track: the truth
+		hist := pts      // what the predictors see
+		if gaps != nil {
+			hist = track.Thin(pts, gaps, track.ThinRNG(*seed, tr.MMSI))
+		}
 		var lastAnchor int64
-		for i, pt := range pts {
+		for i, pt := range hist {
 			if pt.T < testStart || pt.T-lastAnchor < anchorEvery || pt.SpeedKn < minSpeedKn {
 				continue
 			}
 			lastAnchor = pt.T
-			history := pts[:i+1]
+			history := hist[:i+1]
 
 			for _, h := range horizons {
 				target := pt.T + h
@@ -104,11 +147,21 @@ func main() {
 	// Results: one block per horizon, one row per predictor
 	fmt.Printf("\ntest set: after %02d:00 UTC, moving ships (>= %d kn), one question per ship per 10 min\n",
 		testAfterHours, minSpeedKn)
-	// The GRU is called twice per question (once directly, once inside hybrid at >= 10 min)
-	fmt.Printf("gru fallbacks to dead reckoning: %d calls, model errors: %d\n\n", gru.Fallbacks, gru.Errors)
+	// Fallbacks count only direct calls: the hybrid checks Usable first and skips models that can't answer
+	for _, g := range gruModels {
+		fmt.Printf("%s fallbacks to dead reckoning: %d calls, model errors: %d\n", g.Name(), g.Fallbacks, g.Errors)
+	}
+	fmt.Println()
 
-	fmt.Printf("%-8s %6s   %-15s %8s %8s %10s\n", "horizon", "n", "predictor", "median", "p90", "p90 vs DR")
+	pct := func(v, dr float64) float64 {
+		if dr == 0 {
+			return 0
+		}
+		return 100 * (v - dr) / dr
+	}
+	fmt.Printf("%-8s %6s   %-15s %8s %8s %10s %10s\n", "horizon", "n", "predictor", "median", "p90", "p50 vs DR", "p90 vs DR")
 	for _, h := range horizons {
+		drP50 := percentile(errs["dead-reckoning"][h], 0.5)
 		drP90 := percentile(errs["dead-reckoning"][h], 0.9)
 		for k, p := range predictors {
 			e := errs[p.Name()][h]
@@ -116,9 +169,9 @@ func main() {
 			if k == 0 {
 				label, n = fmt.Sprintf("%d min", h/60), fmt.Sprint(len(e))
 			}
-			p90 := percentile(e, 0.9)
-			fmt.Printf("%-8s %6s   %-15s %6.2f km %6.2f km %+9.1f%%\n",
-				label, n, p.Name(), percentile(e, 0.5), p90, 100*(p90-drP90)/drP90)
+			p50, p90 := percentile(e, 0.5), percentile(e, 0.9)
+			fmt.Printf("%-8s %6s   %-15s %6.2f km %6.2f km %+9.1f%% %+9.1f%%\n",
+				label, n, p.Name(), p50, p90, pct(p50, drP50), pct(p90, drP90))
 		}
 		fmt.Println()
 	}

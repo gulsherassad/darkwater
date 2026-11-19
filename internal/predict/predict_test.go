@@ -28,3 +28,42 @@ func TestDeadReckoningUnknownSpeed(t *testing.T) {
 		t.Fatal("unknown speed should fall back to the last position")
 	}
 }
+
+// fake predictor that answers with a fixed spot, usable only for >= minPts points
+type fake struct {
+	minPts   int
+	lat, lon float64
+}
+
+func (f fake) Name() string                                        { return "fake" }
+func (f fake) Usable(h []track.Point) bool                         { return len(h) >= f.minPts }
+func (f fake) Predict(_ []track.Point, _ int64) (float64, float64) { return f.lat, f.lon }
+
+func TestHybridPicksModelByHistory(t *testing.T) {
+	dense := fake{minPts: 10, lat: 1, lon: 1}
+	sparse := fake{minPts: 6, lat: 2, lon: 2}
+	h := Hybrid{Short: StayPut{}, Long: dense, Sparse: sparse, SwitchSec: 600}
+	hist := func(n int) []track.Point {
+		return make([]track.Point, n) // positions don't matter to the fakes
+	}
+
+	if lat, _ := h.Predict(hist(10), 300); lat != 0 {
+		t.Fatal("below the switch: Short")
+	}
+	if lat, _ := h.Predict(hist(10), 1800); lat != 1 {
+		t.Fatal("dense history: Long")
+	}
+	if lat, _ := h.Predict(hist(7), 1800); lat != 2 {
+		t.Fatal("sparse history: Sparse")
+	}
+	// Too little for either model: dead reckoning (unknown speed here → last position)
+	short := []track.Point{{Lat: 55, Lon: 10, SpeedKn: -1, CourseDeg: -1}}
+	if lat, lon := h.Predict(short, 1800); lat != 55 || lon != 10 {
+		t.Fatal("unusable history: dead reckoning")
+	}
+	// Without a sparse model the old behaviour holds
+	h.Sparse = nil
+	if lat, _ := h.Predict(hist(7), 1800); lat != 0 {
+		t.Fatal("no sparse model: dead reckoning")
+	}
+}

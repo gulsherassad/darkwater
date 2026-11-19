@@ -136,3 +136,17 @@
 - v1 mask (AIS "moored" status only): 548 encounters, 217 candidates/scan. Small harbours (FN/VG fishing boats) never report moored; n boats at one quay = n(n-1)/2 pairs
 - v2 mask (3+ distinct ships < 0.5 kn per ~1 km square): 159 port squares, 86 candidates/scan, 32 encounters (-94%)
 - Remaining 32 = rescue/pilot boats at 2-boat bases, same pairs both sessions. Indistinguishable from STS by position alone → need ShipStaticData (type, draught)
+## Sparse GRU for the live feed (features sparse-v2)
+- Live gaps (cmd/livegaps, 14 recordings, 30,210 gaps ≤ 2 h, 1,726 ships): p10 59 s / p25 98 s / median 189 s / p75 430 s / p90 20 min
+- Dense GRU needs 10 fixes in 15 min → on live-density tracks it falls back to DR on 100% of questions
+- Sparse recipe: last 6 fixes within 90 min, + gap since previous fix per point (47 inputs vs 65)
+- Training: Nov 9 DMA thinned with live gaps (3 passes, seeds 1–3), truth from the full track; train 240k / val 48k / test 57k
+- Same-day test (Nov 9 thinned) p90 vs DR: 15 min −9.3%, 30 min −15.2%, 60 min −17.6%; 5 min +31% (hybrid uses DR there)
+- Cross-day, Go harness (Nov 12 18–24 UTC thinned, seed 99, 19,834 questions), hybrid p90 vs DR:
+  | horizon | DR p50 / p90 | hybrid p50 / p90 | p90 change |
+  |---|---|---|---|
+  | 15 min | 0.21 / 1.84 km | 0.25 / 1.71 km | −7.2% |
+  | 30 min | 0.65 / 5.14 km | 0.70 / 4.63 km | −10.0% |
+  | 60 min | 2.15 / 13.29 km| 2.06 / 11.27 km| −15.2% |
+- 0 model errors; sparse falls back to DR on 3,272 direct calls (fewer than 6 fixes in 90 min)
+- Dense pipeline unchanged after refactor: Nov 9 eval reproduces −10.3 / −12.9 / −14.3% exactly

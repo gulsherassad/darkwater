@@ -1,8 +1,10 @@
 """Train a GRU that corrects dead reckoning, then export it to ONNX.
 
 Run from the repo root with the venv active:
-    python ml/train.py
+    python ml/train.py                         # dense v1 → models/traj_gru.onnx
+    python ml/train.py --data data/ml/sparse --model models/traj_gru_sparse.onnx
 """
+import argparse
 import copy
 import json
 import os
@@ -21,23 +23,35 @@ BATCH = 1024
 LR = 1e-3
 HIDDEN = 64
 HORIZONS = [5, 15, 30, 60]
-MODEL_PATH = "models/traj_gru.onnx"
-METRICS_PATH = "models/traj_gru.metrics.json"
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--data", default="data/ml", help="trajexport output dir")
+ap.add_argument("--model", default="models/traj_gru.onnx", help="ONNX file to write (metrics go next to it)")
+args = ap.parse_args()
+DATA = args.data
+MODEL_PATH = args.model
+METRICS_PATH = os.path.splitext(MODEL_PATH)[0] + ".metrics.json"
 
 torch.manual_seed(SEED)
 np.random.seed(SEED)
 
 # ---- Data ----
-meta = json.load(open("data/ml/meta.json"))
+meta = json.load(open(f"{DATA}/meta.json"))
+FEATURES = meta.get("feature_version", "dense-v1")  # exports before versioning were dense
+# Guard against writing a sparse model over the dense one (or the reverse)
+if FEATURES.startswith("sparse") != ("sparse" in os.path.basename(MODEL_PATH)):
+    raise SystemExit(f"{DATA} has {FEATURES} features but the model path is {MODEL_PATH}: "
+                     "sparse models must have 'sparse' in the file name, dense ones must not")
 NCOL = len(meta["columns"])
-NI = meta["num_inputs"]  # 65 inputs, then 2 targets
-H = meta["hist_len"]  # 10 history points
-F = meta["step_features"]  # 6 numbers per point
-SEQ = H * F  # first 60 inputs are the sequence; the last 5 are context
+NI = meta["num_inputs"]  # dense: 65 inputs; sparse: 47. Then 2 targets
+H = meta["hist_len"]  # dense: 10 history points; sparse: 6
+F = meta["step_features"]  # dense: 6 numbers per point; sparse: 7 (adds gap_min)
+SEQ = H * F  # the sequence comes first; the last 5 inputs are context
+print(f"data {DATA}: {FEATURES}, {H} points × {F} features → model {MODEL_PATH}")
 
 
 def load(split):
-    arr = np.fromfile(f"data/ml/{split}.bin", dtype="<f4").reshape(-1, NCOL)
+    arr = np.fromfile(f"{DATA}/{split}.bin", dtype="<f4").reshape(-1, NCOL)
     return arr[:, :NI].copy(), arr[:, NI : NI + 2].copy()
 
 
@@ -72,7 +86,7 @@ class TrajGRU(nn.Module):
 
         seq_n = (seq - self.seq_mean) / self.seq_std
         ctx_n = (ctx - self.ctx_mean) / self.ctx_std
-        _, h = self.gru(seq_n)  # h = memory after reading all 10 points
+        _, h = self.gru(seq_n)  # h = memory after reading all H points
         correction = self.head(torch.cat([h[-1], ctx_n], dim=1))
         return dr + correction  # predicted displacement in km
 
@@ -136,7 +150,7 @@ model.load_state_dict(best_state)
 # ---- Final test: the locked exam ----
 gru_te = metrics(predict(model, Xte), Yte, Xte)
 dr_te = metrics(Xte[:, SEQ + 3 : SEQ + 5], Yte, Xte)
-print("\nTEST (18:00–24:00 UTC), median / p90 in km:")
+print(f"\nTEST (18:00–24:00 UTC, {FEATURES}), median / p90 in km:")
 print(f"{'horizon':8s} {'n':>6s}   {'dead reckoning':>18s}   {'GRU':>18s}   p90 change")
 for h in HORIZONS:
     dm, dp, n = dr_te[h]
@@ -171,5 +185,7 @@ json.dump({
                       "dr_median": dr_te[h][0], "dr_p90": dr_te[h][1], "n": gru_te[h][2]} for h in HORIZONS},
     "best_val_mean_p90": best_score,
     "seed": SEED, "hidden": HIDDEN, "source": meta["source"],
+    "feature_version": FEATURES, "data": DATA,
+    "thin": meta.get("thin", ""), "thin_seed": meta.get("seed"), "thin_passes": meta.get("passes"),
 }, open(METRICS_PATH, "w"), indent=2)
 print(f"saved {METRICS_PATH}")
